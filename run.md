@@ -43,8 +43,9 @@ nci_account -P hn98
 qstat -u $USER
 ```
 
-Chỉ chạy **một tiến trình tại một thời điểm** trên cùng work-dir, vì các job dùng chung cache
-(mask foreground, logit teacher). Không submit song song.
+Chỉ chạy **một tiến trình tại một thời điểm trên mỗi work-dir**, vì các job cùng work-dir
+dùng chung cache và file kết quả. Có thể chạy song song các arm nếu mỗi arm có work-dir riêng;
+việc này tính lặp teacher/cache và tăng dung lượng cần dùng.
 
 ## 2. Submit
 
@@ -97,9 +98,22 @@ echo $J1 $J2 $J3
 | `FIXED_AP` | `0.9` | a_p khi chỉ quét a_n |
 | `FIXED_AN` | `0.25` | a_n khi chỉ quét a_p |
 | `TEACHER_FRAMES` | `32` | Số frame của teacher |
-| `WORK` | `/scratch/hn98/$USER/runs/exp1` | Work-dir |
+| `WORK` | `/scratch/hn98/$USER/runs/exp1` | Work-dir; checkpoint và cache được lưu bên trong |
+| `SEED_CHECKPOINT_EVERY_STEPS` | `5` | Lưu train checkpoint mỗi số optimizer step này |
+| `SEED_EVAL_CHECKPOINT_EVERY` | `25` | Lưu tiến độ đánh giá mỗi số mẫu này |
 
 Ví dụ: `qsub -v ARM=adaptive_pos_only,VALUES="0.25 0.5" scripts/run_exp1.pbs`
+
+Một ngưỡng với walltime 2 giờ; nếu bị walltime-kill, submit lại cùng lệnh và cùng WORK:
+
+```bash
+WORK=/scratch/hn98/$USER/runs/exp1_parallel/adaptive_pos_only
+qsub -l walltime=02:00:00 \
+  -v ARM=adaptive_pos_only,VALUES=0.25,WORK="$WORK" \
+  scripts/run_exp1.pbs
+```
+
+Job cần kết thúc thành công trước khi submit ngưỡng kế tiếp trong cùng WORK.
 
 ## 3. Theo dõi
 
@@ -165,11 +179,18 @@ So sánh Acc(adaptive) > Acc(Base_fix): với mỗi `config`, so hàng `adaptive
 
 ## 5. Chạy lại và tiếp tục khi bị gián đoạn
 
-- Mask foreground, logit teacher, điểm `base` và student đã train xong đều được cache.
-  Submit lại cùng lệnh là bỏ qua phần đã xong và chỉ làm phần còn thiếu.
-- Một lần train bị ngắt giữa epoch **không** có resume; nó train lại từ đầu lần đó.
-- Sửa bất kỳ file `.py` nào trong `src/` làm hash mã nguồn đổi, các cache gắn với hash (logit teacher, student) sẽ tính lại.
-  Mask foreground thì không bị ảnh hưởng.
+- Teacher views được cache nguyên tử theo từng mẫu. Train checkpoint lưu LoRA weights,
+  optimizer/scheduler, epoch, vị trí mẫu, thứ tự mẫu và RNG state; mặc định lưu mỗi 5 optimizer step.
+- Sau khi train xong, adapter được lưu trước khi đánh giá. Tiến độ eval lưu mỗi 25 mẫu,
+  nên lần chạy lại tiếp tục phần eval còn thiếu.
+- Submit lại **đúng cùng `ARM`, `VALUES`, `WORK`** để nạp checkpoint. Nếu chạy một ngưỡng,
+  truyền `VALUES=<ngưỡng>`; các ngưỡng đã hoàn thành được bỏ qua nhờ cache adapter/results.
+- Nếu job bị walltime-kill, job phụ thuộc `afterok` sẽ không tự chạy. Kiểm tra log/exit status,
+  submit lại job bị dừng với cùng biến để tiếp tục, rồi mới chạy ngưỡng tiếp theo.
+- Checkpoint nằm dưới `WORK/cdt_distill_cache_f8_448/seed_component_ablation/students/`
+  trên scratch, không nằm ở `$TMPDIR` hay `jobfs`. Giữ nguyên WORK khi resume.
+- Sửa file `.py` trong `src/` làm thay đổi source fingerprint nên cache/student checkpoint cũ
+  không được dùng như kết quả của phiên bản code mới. Không xóa checkpoint/cache khi còn cần resume.
 
 ## 6. Xử lý lỗi thường gặp
 
