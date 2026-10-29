@@ -133,7 +133,12 @@ def run(runtime):
     runtime.OUT = runtime.Path(runtime.CACHE) / 'seed_component_ablation'
     runtime.OUT.mkdir(exist_ok=True)
     runtime.BASE_TEACHER = runtime.copy.deepcopy(runtime.TEACHERS['T_pos_tcd'])
+    runtime.RUN_TAG = f"ap{runtime.BASE_TEACHER['a_pos']:g}_an{runtime.BASE_TEACHER['negs']['tcd']:g}"
+    runtime.RES = runtime.OUT / 'runs' / runtime.RUN_TAG
+    runtime.RES.mkdir(parents=True, exist_ok=True)
+    runtime.ARM_RUN = list(getattr(runtime.args, 'arms', None) or runtime.ARMS)
     print('Resolved original teacher:', runtime.BASE_TEACHER)
+    print('Run tag:', runtime.RUN_TAG, '| arms to train:', runtime.ARM_RUN, '| results:', runtime.RES)
     print('Original LoRA targets:', runtime.LORA_TARGETS)
     print('Original SEED CE probability:', runtime.CFG['seed_gamma'])
     runtime.file_sha = MethodType(file_sha, runtime)
@@ -182,7 +187,7 @@ def run(runtime):
             assert runtime.torch.isfinite(runtime.z).all()
             runtime.TARGETS_ABL[runtime.name][runtime.k] = runtime.z
             runtime.AUDIT.append(dict(arm=runtime.name, id=runtime.k, ap=runtime.ap, an=runtime.an, gain_pos=runtime.gp, gain_neg=runtime.gn, gate=runtime.gate, sensitivity=runtime.d, equivariance_error=runtime.e, pair_eligible=runtime.r['pair_eligible'], target_margin=runtime.margin(runtime.z), base_margin=runtime.margin(runtime.o), gt=runtime.it['answer']))
-    runtime.pd.DataFrame(runtime.AUDIT).to_csv(runtime.OUT / 'target_diagnostics_train.csv', index=False)
+    runtime.pd.DataFrame(runtime.AUDIT).to_csv(runtime.RES / 'target_diagnostics_train.csv', index=False)
     for runtime.it in runtime.TRAIN[:5]:
         runtime.k = runtime.key(runtime.it)
         runtime.r = runtime.SHARED[runtime.k]
@@ -207,7 +212,7 @@ def run(runtime):
         runtime.SPLITS[runtime.sub] = [i for i in runtime.EH if i['subset'] == runtime.sub]
     runtime.result_rows = MethodType(result_rows, runtime)
     runtime.ROWS = runtime.result_rows('base', runtime.MARG['base'])
-    for runtime.name in runtime.ARMS:
+    for runtime.name in runtime.ARM_RUN:
         for runtime.seed in runtime.ABL['seeds']:
             runtime.out = runtime.train_arm(runtime.name, runtime.seed)
             runtime.tag = f'{runtime.name}_s{runtime.seed}'
@@ -215,8 +220,8 @@ def run(runtime):
             runtime.rows = runtime.result_rows(runtime.tag, runtime.out['marg'])
             runtime.ROWS.extend(runtime.rows)
             runtime.display(runtime.pd.DataFrame(runtime.rows))
-            runtime.pd.DataFrame(runtime.ROWS).to_csv(runtime.OUT / 'results.csv', index=False)
-            runtime.pd.DataFrame([dict(id=runtime.key(i), video=i['video'], question=i['question'], answer=i['answer'], base_margin=runtime.MARG['base'][runtime.key(i)], student_margin=runtime.out['marg'][runtime.key(i)]) for i in runtime.eval_set()]).to_csv(runtime.OUT / f'{runtime.tag}_predictions.csv', index=False)
+            runtime.pd.DataFrame(runtime.ROWS).to_csv(runtime.RES / 'results.csv', index=False)
+            runtime.pd.DataFrame([dict(id=runtime.key(i), video=i['video'], question=i['question'], answer=i['answer'], base_margin=runtime.MARG['base'][runtime.key(i)], student_margin=runtime.out['marg'][runtime.key(i)]) for i in runtime.eval_set()]).to_csv(runtime.RES / f'{runtime.tag}_predictions.csv', index=False)
             runtime.gc.collect()
             runtime.torch.cuda.empty_cache()
     runtime.display(runtime.pd.DataFrame(runtime.ROWS))

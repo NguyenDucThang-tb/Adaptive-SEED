@@ -71,3 +71,11 @@ def run(runtime):
     runtime.CFG['control_teachers'] = []
     runtime.CFG['run'] = []
     runtime.CFG['a_pos'] = 0.9
+    a_pos, a_neg = getattr(runtime.args, 'a_pos', None), getattr(runtime.args, 'a_neg', None)
+    if a_pos is not None:
+        assert 0 < a_pos <= 1, 'a_pos phải trong (0, 1]'
+        runtime.CFG['a_pos'] = a_pos
+    if a_neg is not None:
+        assert 0 < a_neg <= 1, 'a_neg phải trong (0, 1]'
+        runtime.CFG['a_tcd'] = a_neg
+    print('a_pos =', runtime.CFG['a_pos'], '| a_neg (tcd) =', runtime.CFG['a_tcd'])

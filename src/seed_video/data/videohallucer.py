@@ -37,6 +37,14 @@ def take(runtime, cands, n, banned):
         vids |= v
     return (ids, vids)
 
+def _local_repo_files(runtime):
+    files = []
+    for sub in runtime.CFG['subsets']:
+        for dirpath, _, names in runtime.os.walk(f'{runtime.ROOT}/{sub}'):
+            for n in names:
+                files.append(runtime.os.path.relpath(runtime.os.path.join(dirpath, n), runtime.ROOT).replace('\\', '/'))
+    return files
+
 def _dl(runtime, p):
     return runtime.hf_hub_download(runtime.CFG['hf_repo'], p, repo_type='dataset', revision=runtime.CFG['hf_revision'], local_dir=runtime.ROOT, token=runtime.CFG['hf_token'])
 
@@ -50,8 +58,13 @@ def run(runtime):
     runtime.snapshot_download = snapshot_download
     runtime.ROOT = runtime.CFG['data_root']
     runtime.os.makedirs(runtime.ROOT, exist_ok=True)
-    runtime.snapshot_download(repo_id=runtime.CFG['hf_repo'], repo_type='dataset', revision=runtime.CFG['hf_revision'], allow_patterns=[f'{s}/*.json' for s in runtime.CFG['subsets']], local_dir=runtime.ROOT, token=runtime.CFG['hf_token'])
-    runtime.REPO_FILES = runtime.HfApi().list_repo_files(runtime.CFG['hf_repo'], repo_type='dataset', revision=runtime.CFG['hf_revision'], token=runtime.CFG['hf_token'])
+    runtime.OFFLINE = runtime.os.environ.get('HF_HUB_OFFLINE') == '1'
+    if runtime.OFFLINE:
+        runtime.REPO_FILES = _local_repo_files(runtime)
+        print(f'HF_HUB_OFFLINE=1: dùng dữ liệu local trong {runtime.ROOT} ({len(runtime.REPO_FILES)} file)')
+    else:
+        runtime.snapshot_download(repo_id=runtime.CFG['hf_repo'], repo_type='dataset', revision=runtime.CFG['hf_revision'], allow_patterns=[f'{s}/*.json' for s in runtime.CFG['subsets']], local_dir=runtime.ROOT, token=runtime.CFG['hf_token'])
+        runtime.REPO_FILES = runtime.HfApi().list_repo_files(runtime.CFG['hf_repo'], repo_type='dataset', revision=runtime.CFG['hf_revision'], token=runtime.CFG['hf_token'])
     runtime.VIDEO_INDEX = {}
     for runtime.f in runtime.REPO_FILES:
         if runtime.f.lower().endswith(('.mp4', '.mkv', '.webm', '.avi', '.mov')):
@@ -80,6 +93,8 @@ def run(runtime):
     assert len(runtime.VAL) and len(runtime.TEST), 'VAL hoặc TEST rỗng → giảm n_train_pairs / n_val_pairs hoặc thêm subset'
     runtime.need = sorted({i['repo_path'] for i in runtime.TRAIN + runtime.VAL + runtime.TEST})
     runtime.todo = [p for p in runtime.need if not runtime.os.path.exists(runtime.os.path.join(runtime.ROOT, p))]
+    if runtime.OFFLINE and runtime.todo:
+        raise RuntimeError(f'Offline nhưng thiếu {len(runtime.todo)} video, ví dụ {runtime.todo[:3]}')
     runtime._dl = MethodType(_dl, runtime)
     runtime.failed = []
     with runtime.ThreadPoolExecutor(runtime.CFG['download_workers']) as runtime.ex:

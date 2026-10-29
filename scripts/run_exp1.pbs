@@ -1,0 +1,47 @@
+#!/bin/bash
+# Thực nghiệm 1a: Answer-gain adaptive. Mỗi job quét 5 ngưỡng cho một arm.
+#   qsub -v ARM=adaptive_pos_only run_exp1.pbs
+#   qsub -v ARM=adaptive_neg_only run_exp1.pbs
+#   qsub -v ARM=adaptive_pos_neg  run_exp1.pbs
+# Submit từ thư mục gốc repo (có #PBS -l wd). Các job dùng chung cache nên chạy nối tiếp
+# (qsub -W depend=afterok:<jobid>), không chạy song song.
+#PBS -P hn98
+#PBS -N seed_exp1
+#PBS -q dgxa100
+#PBS -l ncpus=16
+#PBS -l ngpus=1
+#PBS -l mem=120GB
+#PBS -l jobfs=100GB
+#PBS -l walltime=24:00:00
+#PBS -l storage=scratch/hn98+scratch/jp09
+#PBS -l wd
+#PBS -j oe
+
+set -u
+: "${ARM:?Truyền ARM bằng qsub -v ARM=adaptive_pos_only|adaptive_neg_only|adaptive_pos_neg}"
+
+VALUES="${VALUES:-0.25 0.5 0.75 0.9 1}"
+FIXED_AP="${FIXED_AP:-0.9}"     # a_pos mặc định khi chỉ quét a_neg
+FIXED_AN="${FIXED_AN:-0.25}"    # a_neg mặc định khi chỉ quét a_pos
+WORK="${WORK:-/scratch/hn98/$USER/runs/exp1}"
+
+module load python3/3.11.7 cuda/12.3.2
+source /scratch/hn98/$USER/venv/bin/activate
+
+export HF_HOME=/scratch/hn98/$USER/hf_cache
+export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+export PYTHONPATH="$PWD/src"
+
+for v in $VALUES; do
+  case "$ARM" in
+    adaptive_pos_only) AP=$v;        AN=$FIXED_AN ;;
+    adaptive_neg_only) AP=$FIXED_AP; AN=$v ;;
+    adaptive_pos_neg)  AP=$v;        AN=$v ;;
+    *) echo "ARM không hợp lệ: $ARM"; exit 2 ;;
+  esac
+  echo "===== $ARM | a_pos=$AP a_neg=$AN | $(date) ====="
+  # seed_base cùng (a_pos, a_neg) là Base_fix để so sánh công bằng.
+  python -m seed_video --stage core --work-dir "$WORK" \
+      --a-pos "$AP" --a-neg "$AN" --arms seed_base "$ARM" \
+    || echo "FAILED: a_pos=$AP a_neg=$AN"
+done
