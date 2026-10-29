@@ -1,0 +1,17 @@
+torch>=2.5
+torchvision>=0.20
+transformers==4.51.3
+peft==0.15.2
+accelerate
+huggingface_hub
+decord
+timm
+kornia
+einops
+scipy
+numpy
+pandas
+Pillow
+gdown
+opencv-python-headless
+tqdm
