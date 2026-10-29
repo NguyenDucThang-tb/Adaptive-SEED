@@ -35,7 +35,7 @@ def feature_enhance(runtime, V, fg, alpha, alpha_s, beta):
     return runtime.torch.where(mask[..., None], enhanced, V)
 
 def extra_logits(runtime, it, selected=False, reverse=False, probe=None):
-    fr, fps, _ = runtime.view_frames(it, 'orig')
+    fr, fps, _ = runtime.view_frames(it, 'orig', runtime.CFG['teacher_frames'])
     if reverse:
         fr = list(reversed(fr))
     inp = runtime.build_inputs(fr, probe or it['question'], fps, yn=True).to(runtime.DEV)
@@ -70,7 +70,7 @@ def prepare_shared(runtime):
         for b in ['orig', 'orig+fg', 'tcd']:
             runtime.model.eval()
             with runtime.adapter_off(), runtime.torch.no_grad():
-                rec[b] = runtime.fwd_view(it, b)[0].logits[0, -1].detach().float().cpu()
+                rec[b] = runtime.fwd_view(it, b, nf=runtime.CFG['teacher_frames'])[0].logits[0, -1].detach().float().cpu()
         rec['selected'] = runtime.extra_logits(it, selected=True)
         rec['pair'] = {}
         eligible = it.get('pi_valid', False)
@@ -133,7 +133,7 @@ def run(runtime):
     runtime.OUT = runtime.Path(runtime.CACHE) / 'seed_component_ablation'
     runtime.OUT.mkdir(exist_ok=True)
     runtime.BASE_TEACHER = runtime.copy.deepcopy(runtime.TEACHERS['T_pos_tcd'])
-    runtime.RUN_TAG = f"ap{runtime.BASE_TEACHER['a_pos']:g}_an{runtime.BASE_TEACHER['negs']['tcd']:g}"
+    runtime.RUN_TAG = f"ap{runtime.BASE_TEACHER['a_pos']:g}_an{runtime.BASE_TEACHER['negs']['tcd']:g}_tf{runtime.CFG['teacher_frames']}"
     runtime.RES = runtime.OUT / 'runs' / runtime.RUN_TAG
     runtime.RES.mkdir(parents=True, exist_ok=True)
     runtime.ARM_RUN = list(getattr(runtime.args, 'arms', None) or runtime.ARMS)

@@ -3,7 +3,7 @@ from types import MethodType
 
 def branch_cfg(runtime, b):
     base, _, fe = b.partition('+')
-    d = dict(model=runtime.CFG['model_id'], n_frames=runtime.CFG['n_frames'], frame_size=runtime.CFG['frame_size'], prompt=runtime.PROMPT_TAG, view=base)
+    d = dict(model=runtime.CFG['model_id'], n_frames=runtime.CFG['n_frames'], teacher_frames=runtime.CFG['teacher_frames'], frame_size=runtime.CFG['frame_size'], prompt=runtime.PROMPT_TAG, view=base)
     if base == 'tcd':
         d['tcd_frames'] = runtime.CFG['tcd_frames']
     if base == 'shuf':

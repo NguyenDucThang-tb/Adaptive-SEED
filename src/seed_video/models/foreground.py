@@ -35,8 +35,8 @@ def run(runtime):
     runtime.AutoModelForImageSegmentation = AutoModelForImageSegmentation
     from torchvision import transforms
     runtime.transforms = transforms
-    runtime.FG_GRID = (runtime.CFG['n_frames'] // 2, runtime.CFG['frame_size'] // 28, runtime.CFG['frame_size'] // 28)
-    runtime.MASK_CFG = dict(algo='fg_birefnet_v1', birefnet=runtime.CFG['birefnet_id'], bir_res=1024, n_frames=runtime.CFG['n_frames'], frame_size=runtime.CFG['frame_size'], grid=runtime.FG_GRID, kernel=runtime.CFG['fg_kernel'], avg_weight=runtime.CFG['fg_avg_weight'])
+    runtime.FG_GRID = (runtime.CFG['teacher_frames'] // 2, runtime.CFG['frame_size'] // 28, runtime.CFG['frame_size'] // 28)
+    runtime.MASK_CFG = dict(algo='fg_birefnet_v1', birefnet=runtime.CFG['birefnet_id'], bir_res=1024, n_frames=runtime.CFG['teacher_frames'], frame_size=runtime.CFG['frame_size'], grid=runtime.FG_GRID, kernel=runtime.CFG['fg_kernel'], avg_weight=runtime.CFG['fg_avg_weight'])
     runtime.MASK_TAG = runtime.cfg_hash(runtime.MASK_CFG)
     runtime.os.makedirs(f'{runtime.CACHE}/fg_{runtime.MASK_TAG}', exist_ok=True)
     runtime.mask_path = MethodType(mask_path, runtime)
@@ -48,7 +48,7 @@ def run(runtime):
         runtime.t0 = runtime.time.time()
         with runtime.torch.inference_mode():
             for runtime.j, runtime.v in enumerate(runtime.todo_m):
-                runtime.fr = list(runtime._decode(runtime.v, runtime.CFG['n_frames'], runtime.CFG['frame_size'])[0])
+                runtime.fr = list(runtime._decode(runtime.v, runtime.CFG['teacher_frames'], runtime.CFG['frame_size'])[0])
                 runtime.preds = []
                 for runtime.k in range(0, len(runtime.fr), 4):
                     runtime.p = runtime.birefnet(runtime.torch.stack([runtime.tf_bir(f) for f in runtime.fr[runtime.k:runtime.k + 4]]).to(runtime.DEV).half())

@@ -33,7 +33,7 @@ def run(runtime):
         else:
             runtime.model.eval()
             with runtime.adapter_off(), runtime.torch.no_grad():
-                runtime.z_noise = runtime.fwd_view(runtime.it, 'seednoise')[0].logits[0, -1].detach().float().cpu()
+                runtime.z_noise = runtime.fwd_view(runtime.it, 'seednoise', nf=runtime.CFG['teacher_frames'])[0].logits[0, -1].detach().float().cpu()
             runtime.tmp = str(runtime.path) + '.tmp'
             runtime.torch.save({'meta': runtime.meta, 'logits': runtime.z_noise}, runtime.tmp)
             runtime.os.replace(runtime.tmp, runtime.path)

@@ -1,8 +1,8 @@
 """data: video stage. Explicit run-scoped state; import has no GPU or I/O side effects."""
 from types import MethodType
 
-def view_frames(runtime, it, view):
-    fr, dur = runtime._decode(it['video'], runtime.CFG['n_frames'], runtime.CFG['frame_size'])
+def view_frames(runtime, it, view, nf=None):
+    fr, dur = runtime._decode(it['video'], nf or runtime.CFG['n_frames'], runtime.CFG['frame_size'])
     fr = list(fr)
     n = len(fr)
     fidx = list(range(n))

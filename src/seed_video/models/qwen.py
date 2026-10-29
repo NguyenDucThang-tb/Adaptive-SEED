@@ -17,9 +17,9 @@ def with_response(runtime, inp, resp):
     d['attention_mask'] = runtime.torch.cat([inp['attention_mask'], runtime.torch.ones_like(resp)[None].to(inp['attention_mask'].device)], 1)
     return d
 
-def fwd_view(runtime, it, view, grad=False, resp=None, need_hs=False, question=None):
+def fwd_view(runtime, it, view, grad=False, resp=None, need_hs=False, question=None, nf=None):
     base, _, fe = view.partition('+')
-    fr, fps, fidx = runtime.view_frames(it, base)
+    fr, fps, fidx = runtime.view_frames(it, base, nf)
     inp = runtime.build_inputs(fr, question or it['question'], fps, yn=question is None).to(runtime.DEV)
     if resp is not None:
         inp = runtime.with_response(inp, resp)
@@ -112,11 +112,11 @@ def run(runtime):
     runtime.margin = MethodType(margin, runtime)
     runtime.it0 = runtime.TEST[0]
     for runtime.v in ['orig', 'tcd', 'shuf']:
-        runtime._, runtime.inp = runtime.fwd_view(runtime.it0, runtime.v)
+        runtime._, runtime.inp = runtime.fwd_view(runtime.it0, runtime.v, nf=runtime.CFG['teacher_frames'])
         print(f"{runtime.v:5s} grid={runtime.inp['video_grid_thw'][0].tolist()} second_per_grid_ts={runtime.inp.get('second_per_grid_ts')}")
     runtime.saved = dict(runtime.hook.kw)
     runtime.hook.kw = dict(alpha=0.0, alpha_s=0.0, beta=0.0)
-    runtime.d = (runtime.fwd_view(runtime.it0, 'orig')[0].logits[0, -1].float() - runtime.fwd_view(runtime.it0, 'orig+fg')[0].logits[0, -1].float()).abs().max().item()
+    runtime.d = (runtime.fwd_view(runtime.it0, 'orig', nf=runtime.CFG['teacher_frames'])[0].logits[0, -1].float() - runtime.fwd_view(runtime.it0, 'orig+fg', nf=runtime.CFG['teacher_frames'])[0].logits[0, -1].float()).abs().max().item()
     runtime.hook.kw = runtime.saved
     print(f'null positive vs orig: max|Δ| = {runtime.d:.2e}')
     assert runtime.d == 0.0, 'harness không sạch'
