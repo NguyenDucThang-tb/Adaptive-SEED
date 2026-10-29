@@ -17,7 +17,7 @@
 #PBS -l wd
 #PBS -j oe
 
-set -u
+set -euo pipefail
 : "${ARM:?Truyền ARM bằng qsub -v ARM=adaptive_pos_only|adaptive_neg_only|adaptive_pos_neg}"
 
 VALUES="${VALUES:-0.25 0.5 0.75 0.9 1}"
@@ -25,6 +25,10 @@ FIXED_AP="${FIXED_AP:-0.9}"     # a_pos mặc định khi chỉ quét a_neg
 FIXED_AN="${FIXED_AN:-0.25}"    # a_neg mặc định khi chỉ quét a_pos
 WORK="${WORK:-/scratch/hn98/$USER/runs/exp1}"
 TEACHER_FRAMES="${TEACHER_FRAMES:-32}"   # student giữ 8 frame, teacher dùng 32 frame
+SMOKE_ARGS=()
+if [[ -n "${SMOKE_PAIRS:-}" ]]; then
+  SMOKE_ARGS=(--smoke-pairs "$SMOKE_PAIRS" --no-eh)
+fi
 
 module load python3/3.11.7 cuda/12.3.2
 source /scratch/hn98/$USER/venv/bin/activate
@@ -44,5 +48,5 @@ for v in $VALUES; do
   # seed_base cùng (a_pos, a_neg) là Base_fix để so sánh công bằng.
   python -m seed_video --stage core --work-dir "$WORK" \
       --a-pos "$AP" --a-neg "$AN" --teacher-frames "$TEACHER_FRAMES" --arms seed_base "$ARM" \
-    || echo "FAILED: a_pos=$AP a_neg=$AN"
+      "${SMOKE_ARGS[@]}"
 done

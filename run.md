@@ -9,7 +9,7 @@ quét ngưỡng max a ∈ {0.25, 0.5, 0.75, 0.9, 1}. Student 8 frame, teacher 32
 |---|---|
 | Project tính SU | `hn98` |
 | Queue | `gpuhopper` (1 GPU H200) |
-| Code | `/scratch/hn98/$USER/Adaptive-SEED-` (nhánh `exp1-answer-gain-sweep`) |
+| Code | `/scratch/hn98/$USER/Adaptive-SEED` (nhánh `exp1-answer-gain-sweep`) |
 | venv | `/scratch/hn98/$USER/venv` |
 | HF cache (Qwen, BiRefNet) | `/scratch/hn98/$USER/hf_cache` |
 | Work-dir | `/scratch/hn98/$USER/runs/exp1` |
@@ -22,7 +22,7 @@ Node GPU **không có Internet**. Mọi thứ phải tải trước ở login no
 Lấy code mới nhất:
 
 ```bash
-cd /scratch/hn98/$USER/Adaptive-SEED-
+cd /scratch/hn98/$USER/Adaptive-SEED
 git pull mine exp1-answer-gain-sweep
 git log --oneline -1
 ```
@@ -48,15 +48,29 @@ Chỉ chạy **một tiến trình tại một thời điểm** trên cùng work
 
 ## 2. Submit
 
-### 2.1 Chạy thử một ngưỡng (khuyến nghị làm trước)
+### 2.1 Smoke test nhỏ (khuyến nghị làm trước)
 
 ```bash
-cd /scratch/hn98/$USER/Adaptive-SEED-
-qsub -v ARM=adaptive_pos_only,VALUES=0.9 scripts/run_exp1.pbs
+cd /scratch/hn98/$USER/Adaptive-SEED
+
+FULL_WORK=/scratch/hn98/$USER/runs/exp1
+SMOKE_WORK=/scratch/hn98/$USER/runs/exp1_smoke
+test -d "$FULL_WORK/VideoHallucer" || { echo "Thiếu $FULL_WORK/VideoHallucer"; exit 1; }
+mkdir -p "$SMOKE_WORK"
+if [ -e "$SMOKE_WORK/VideoHallucer" ] || [ -L "$SMOKE_WORK/VideoHallucer" ]; then
+  echo "Đích smoke đã tồn tại; kiểm tra trước, không ghi đè."
+  exit 1
+fi
+ln -s "$FULL_WORK/VideoHallucer" "$SMOKE_WORK/VideoHallucer"
+
+qsub -l walltime=00:30:00 \
+  -v ARM=adaptive_pos_only,VALUES=0.9,SMOKE_PAIRS=1,WORK="$SMOKE_WORK" \
+  scripts/run_exp1.pbs
 ```
 
-Job này dựng toàn bộ cache dùng chung (mask foreground 32 frame, logit teacher, điểm base)
-và kiểm tra pipeline end-to-end. Kết quả ngưỡng 0.9 được dùng lại ở lượt chạy đầy đủ.
+Smoke dùng 1 cặp train, 1 cặp validation, 1 cặp test; chỉ chạy `seed_base` và
+`adaptive_pos_only` tại ngưỡng 0.9, đồng thời tắt EventHallusion. Cache được tách khỏi full run.
+Đây chỉ là kiểm tra pipeline, không dùng accuracy smoke làm kết quả nghiên cứu.
 
 ### 2.2 Chạy đầy đủ, ba job nối tiếp
 
@@ -98,7 +112,7 @@ qstat -fx <jobid> | grep -iE "estimated|comment|resources_used"
 Các mốc cần thấy trong log, theo thứ tự:
 
 1. `student n_frames = 8 | teacher_frames = 32`
-2. `HF_HUB_OFFLINE=1: dùng dữ liệu local ...` và `train 150 cặp | val 50 cặp | test 155 cặp`
+2. `HF_HUB_OFFLINE=1: dùng dữ liệu local ...` và số cặp train/val/test khớp với chế độ chạy
 3. `EventHallusion: ... câu / ... video | thiếu: 0`
 4. `fg cache: ... | lưới (16, 16, 16)` (BiRefNet; lần đầu mất khoảng 30 phút cho cả VH và EH)
 5. `null positive vs orig: max|Δ| = 0.00e+00`
@@ -106,11 +120,11 @@ Các mốc cần thấy trong log, theo thứ tự:
 7. `[seed_base_s0] epoch 0: {...}` rồi `[adaptive_pos_only_s0] epoch 0: {...}`
 8. Với mỗi ngưỡng, dòng `===== <ARM> | a_pos=... a_neg=... =====` mở đầu một lượt
 
-Nếu một ngưỡng lỗi, script chỉ in `FAILED: a_pos=... a_neg=...` rồi chạy tiếp ngưỡng sau.
-Tìm nhanh các ngưỡng lỗi:
+Nếu một ngưỡng lỗi, `set -e` kết thúc job với trạng thái lỗi để job `afterok` kế tiếp không chạy nhầm.
+Xem log PBS của job để tìm traceback hoặc cấu hình gây lỗi.
 
 ```bash
-grep -n "FAILED" seed_exp1.o*
+qstat -fx <jobid> | grep -iE 'Exit_status|comment|resources_used'
 ```
 
 ## 4. Kết quả

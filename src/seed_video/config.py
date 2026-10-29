@@ -46,6 +46,12 @@ def run(runtime):
     runtime.CFG = dict(model_id='Qwen/Qwen2.5-VL-7B-Instruct', birefnet_id='ZhengPeng7/BiRefNet', hf_repo='bigai-nlco/VideoHallucer', hf_revision='c93475bf1be466c1af90d005749ccb4e6b3ad066', data_root='/content/VideoHallucer', subsets=['temporal', 'object_relation'], download_workers=8, hf_token=None, n_train_pairs=150, n_val_pairs=50, n_test_pairs=300, split_seed=0, n_frames=16, frame_size=448, alpha=0.8, alpha_s=0.8, beta=0.4, fg_thr=0.15, fg_kernel=5, fg_avg_weight=0.7, fg_soft=False, tcd_frames=4, seed_noise_alpha=0.3, a_pos=1, a_tcd=0.25, plaus_beta=0.1, lora_r=16, lora_alpha=32, lora_dropout=0.05, lr=0.0001, epochs=2, grad_accum=8, seeds=[0], hinton_T=2.0, p_open=0.5, open_prompt='Describe what happens in the video in temporal order, mentioning the main objects and actions.', open_max_new=48, yn_max_new=4, gen_temp=1.0, jsd_beta=0.5, tvdf_keep=0.5, tvdf_use_gt=False, seed_groups=4, seed_betas=(1.1, 0.8, 0.6, 0.4), seed_gamma=0.1, grad_ckpt=True, eval_train=True, teachers=['T_pos', 'T_tcd', 'T_pos_tcd'], methods=['kd_basic', 'seed', 'seed_nolabel'], controls=[], seq_plaus=True, opsd_anchor=1.0, control_teachers=['T_base', 'T_posrand_tcd', 'T_noise'], a_noise=0.5, best_method='auto', best_pool='nolabel', eh=dict(enable=True, gdrive_id='1IPmx6Y80UrXwVPmZJh6zjCPHtlsw4p9n', q_commit='aa544c21c7cd93b4685423cb94f77ab441f754bc', splits=['entire', 'mix', 'misleading'], allow_missing=False))
     if runtime.FAST:
         runtime.CFG.update(n_frames=8, tcd_frames=4, epochs=1, grad_ckpt=False, eval_train=True, open_max_new=32)
+    smoke_pairs = getattr(runtime.args, 'smoke_pairs', None)
+    if smoke_pairs is not None:
+        if smoke_pairs < 1:
+            raise ValueError('--smoke-pairs must be >= 1')
+        runtime.CFG.update(subsets=['temporal'], n_train_pairs=smoke_pairs, n_val_pairs=1, n_test_pairs=1)
+        print(f'SMOKE mode: temporal only; train={smoke_pairs} pair(s), val=1 pair, test=1 pair; EventHallusion disabled')
     teacher_frames = getattr(runtime.args, 'teacher_frames', None) or runtime.CFG['n_frames']
     assert teacher_frames % 2 == 0 and teacher_frames >= runtime.CFG['tcd_frames'], 'teacher_frames phải chẵn và >= tcd_frames'
     runtime.CFG['teacher_frames'] = teacher_frames
@@ -53,7 +59,7 @@ def run(runtime):
     runtime.WORK = runtime.args.work_dir.expanduser().resolve()
     runtime.WORK.mkdir(parents=True, exist_ok=True)
     runtime.CFG['data_root'] = str(runtime.WORK / 'VideoHallucer')
-    runtime.CFG['eh']['enable'] = not runtime.args.no_eh
+    runtime.CFG['eh']['enable'] = not runtime.args.no_eh and smoke_pairs is None
     runtime.CFG['eh']['root'] = str(runtime.WORK / 'EventHallusion')
     runtime.CACHE = str(runtime.WORK / f"cdt_distill_cache_f{runtime.CFG['n_frames']}_{runtime.CFG['frame_size']}")
     runtime.CFG['cache_dir'] = runtime.CACHE

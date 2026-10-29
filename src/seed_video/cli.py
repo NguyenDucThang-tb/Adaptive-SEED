@@ -16,6 +16,8 @@ def main(argv=None):
     parser.add_argument("--a-neg", type=float, default=None, help="Max negative (TCD) coefficient a_n in (0, 1]; default 0.25")
     parser.add_argument("--teacher-frames", type=int, default=None,
                         help="Frames decoded for teacher branches (orig, orig+fg, tcd, seednoise); default = student n_frames (8)")
+    parser.add_argument("--smoke-pairs", type=int, default=None,
+                        help="Smoke only: use temporal subset with this many train pairs plus 1 validation and 1 test pair; EventHallusion is disabled")
     parser.add_argument("--arms", nargs="+", choices=ABLATION_ARMS, default=None,
                         help="Only train these ablation arms (stage components); default all 8")
     parser.add_argument("--dry-run", action="store_true", help="Print stages without data downloads or GPU access")
