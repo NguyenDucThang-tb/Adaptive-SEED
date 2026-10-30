@@ -1,224 +1,341 @@
-# Chạy batch Thực nghiệm 1a (Answer-gain adaptive) trên Gadi
+# Thực nghiệm 1a: Answer-gain adaptive, chạy trên Gadi
 
-Mục tiêu: so sánh Acc(adaptive) với Acc(Base_fix) cho ba arm Only Pos, Only Neg, Both,
-quét ngưỡng max a ∈ {0.25, 0.5, 0.75, 0.9, 1}. Student 8 frame, teacher 32 frame.
+Mục tiêu: so sánh Acc(adaptive) với Acc(Base_fix) cho ba arm Only Pos, Only Neg, Both, quét
+ngưỡng max của a_p và a_n ∈ {0.25, 0.5, 0.75, 0.9, 1}. Student 8 frame, teacher 32 frame.
 
-## 0. Thông tin cố định
+Kết quả được báo cáo theo thứ tự cột của bảng thực nghiệm:
+
+| Arm | VideoHallucer pair acc | VideoHallucer Q acc | EventHallusion |
+|---|---|---|---|
+
+Cả ba chỉ số (cùng wrong-to-correct và correct-to-wrong) được tính trong **cùng một lần chạy**
+mỗi cấu hình; không có lần chạy riêng cho từng chỉ số. Thứ tự chỉ ảnh hưởng cách gộp bảng ở mục 6.
+
+## 0. Quy ước chung
+
+Chạy từng khối lệnh trên login node của Gadi. **Không dán cả file vào terminal.**
 
 | Mục | Giá trị |
 |---|---|
 | Project tính SU | `hn98` |
 | Queue | `gpuhopper` (1 GPU H200) |
-| Code | `/scratch/hn98/$USER/Adaptive-SEED` (nhánh `exp1-answer-gain-sweep`) |
+| Code | `/scratch/hn98/$USER/Adaptive-SEED` |
 | venv | `/scratch/hn98/$USER/venv` |
 | HF cache (Qwen, BiRefNet) | `/scratch/hn98/$USER/hf_cache` |
-| Work-dir | `/scratch/hn98/$USER/runs/exp1` |
-| Dữ liệu gốc (chỉ đọc) | `/scratch/jp09/dd9648/datasets_video_hallu` |
+| Dữ liệu dùng chung | `/scratch/hn98/$USER/data` |
+| Work-dir (cache, checkpoint, kết quả) | `/scratch/hn98/$USER/runs/exp1` |
 
-Node GPU **không có Internet**. Mọi thứ phải tải trước ở login node.
-
-## 1. Kiểm tra trước khi submit (login node)
-
-Lấy code mới nhất:
+Node GPU **không có Internet**. Mọi thứ cần tải phải tải ở login node trước.
+Job chỉ ghi vào `/scratch`, không ghi vào `$HOME` (quota 10 GB).
 
 ```bash
-cd /scratch/hn98/$USER/Adaptive-SEED
-git pull mine exp1-answer-gain-sweep
-git log --oneline -1
+export CODE=/scratch/hn98/$USER/Adaptive-SEED
+export DATA=/scratch/hn98/$USER/data
+export WORK=/scratch/hn98/$USER/runs/exp1
+export HF_HOME=/scratch/hn98/$USER/hf_cache
+export PIP_CACHE_DIR=/scratch/hn98/$USER/pip_cache
+mkdir -p $DATA $WORK $HF_HOME $PIP_CACHE_DIR /scratch/hn98/$USER/logs
 ```
 
-Kiểm tra dữ liệu trong work-dir:
+Các biến này mất khi đóng terminal; chạy lại khối trên mỗi phiên mới.
+
+## 1. Chuẩn bị một lần
+
+### 1.1 Code
 
 ```bash
-W=/scratch/hn98/$USER/runs/exp1
-find $W/VideoHallucer -name "*.mp4" | wc -l                       # mong đợi 348
-for d in entire interleave misleading; do echo $d $(ls $W/EventHallusion/$d | wc -l); done   # 109 / 193 / 95
-ls $HF_HOME/hub 2>/dev/null || ls /scratch/hn98/$USER/hf_cache/hub   # có models--Qwen... và models--ZhengPeng7--BiRefNet
+cd /scratch/hn98/$USER
+git clone https://github.com/NguyenDucThang-tb/Adaptive-SEED.git
+cd $CODE && git checkout exp1-answer-gain-sweep && git log --oneline -1
 ```
 
-Kiểm tra SU còn lại và không có job cũ đang chạy:
+Cập nhật sau này: `git pull`. **Không `git pull` hoặc sửa file `.py` giữa các lần resume** của cùng một
+cấu hình, vì hash mã nguồn đổi làm cache teacher và checkpoint cũ không còn được nhận (mục 7).
+
+### 1.2 Môi trường Python
+
+```bash
+module load python3/3.11.7 cuda/12.3.2
+python3 -m venv /scratch/hn98/$USER/venv
+source /scratch/hn98/$USER/venv/bin/activate
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+pip install -r $CODE/requirements.txt
+pip list 2>/dev/null | grep -iE "^(torch|transformers|peft) "
+```
+
+Cần `transformers 4.51.3` và `peft 0.15.2`. Repo không có `pyproject.toml`; code chạy bằng `PYTHONPATH=src`
+(file `.pbs` đã đặt sẵn).
+
+### 1.3 Model (tải ở login node)
+
+```bash
+huggingface-cli download Qwen/Qwen2.5-VL-7B-Instruct
+huggingface-cli download ZhengPeng7/BiRefNet
+ls $HF_HOME/hub
+```
+
+Phải thấy `models--Qwen--Qwen2.5-VL-7B-Instruct` (khoảng 16 GB) và `models--ZhengPeng7--BiRefNet`.
+Nên chạy trong `screen -S dl` để không mất khi rớt SSH.
+
+### 1.4 Dữ liệu VideoHallucer
+
+Dùng lại bản có sẵn của project `jp09` (chỉ đọc), liên kết từng file bằng `cp -rs`:
+
+```bash
+SRC_VH=/scratch/jp09/dd9648/datasets_video_hallu/videohallucer
+mkdir -p $WORK/VideoHallucer
+cp -rs $SRC_VH/temporal $SRC_VH/object_relation $WORK/VideoHallucer/
+find $WORK/VideoHallucer -name "*.mp4" | wc -l      # mong đợi 348
+```
+
+### 1.5 Dữ liệu EventHallusion (cần đủ 109 / 193 / 95 video)
+
+Bản có sẵn ở `jp09` **thiếu 40 video `mix`**. Tải bản đầy đủ từ Google Drive (id ghim trong `config.py`):
+
+```bash
+mkdir -p $DATA/eh && cd $DATA/eh
+gdown 1IPmx6Y80UrXwVPmZJh6zjCPHtlsw4p9n -O videos.zip
+python - <<'EOF'
+import zipfile
+z = zipfile.ZipFile('videos.zip')
+print('entry:', len(z.infolist()), '| giải nén: %.2f GB' % (sum(i.file_size for i in z.infolist()) / 1e9))
+EOF
+```
+
+Tổng giải nén phải gần 5 GB. Bản `unzip` mới báo nhầm "zip bomb" với file này, nên giải nén bằng Python:
+
+```bash
+python - <<'EOF'
+import zipfile
+zipfile.ZipFile('videos.zip').extractall('extracted')
+EOF
+for d in entire interleave misleading; do echo $d $(ls extracted/videos/$d | wc -l); done   # 109 / 193 / 95
+mkdir -p $DATA/eh/questions
+cp /scratch/jp09/dd9648/video-hallucination-benchmark/external/EventHallusion/questions/*.json $DATA/eh/questions/
+ls $DATA/eh/questions
+```
+
+Phải có `entire_questions.json`, `misleading_questions.json`, `mix_questions.json`.
+
+### 1.6 Dựng work-dir
+
+Hàm sau dựng EventHallusion vào một work-dir bất kỳ (dùng lại khi tạo work-dir riêng cho smoke test hoặc chạy song song):
+
+```bash
+prep_eh() {   # prep_eh <work-dir>
+  mkdir -p "$1/EventHallusion/questions"
+  cp $DATA/eh/questions/*.json "$1/EventHallusion/questions/"
+  cp -rs $DATA/eh/extracted/videos/. "$1/EventHallusion/"
+  for d in entire interleave misleading; do echo "$d $(ls "$1/EventHallusion/$d" | wc -l)"; done
+}
+prep_eh $WORK
+```
+
+Phải in `entire 109`, `interleave 193`, `misleading 95`. Nếu thiếu `questions/*.json`, code sẽ cố tải từ
+GitHub và job chết với `Network is unreachable`.
+
+### 1.7 Kiểm tra SU
 
 ```bash
 nci_account -P hn98
+```
+
+Cột `Avail` phải còn đủ SU. Mỗi giờ H200 tính theo hệ số của queue `gpuhopper`.
+
+## 2. Smoke test (làm trước khi chạy thật)
+
+Chạy 1 cặp train, 1 val, 1 test, chỉ subset `temporal`, tắt EventHallusion. Mục đích là kiểm tra pipeline
+(dữ liệu, mask, Qwen, teacher 32 frame, train, đánh giá), không dùng accuracy của smoke làm kết quả.
+
+```bash
+cd $CODE
+export SMOKE=/scratch/hn98/$USER/runs/exp1_smoke
+mkdir -p $SMOKE && ln -s $WORK/VideoHallucer $SMOKE/VideoHallucer
+qsub -l walltime=00:30:00 -v ARM=adaptive_pos_only,VALUES=0.9,SMOKE_PAIRS=1,WORK=$SMOKE scripts/run_exp1.pbs
+```
+
+Nếu `ln -s` báo đích đã tồn tại, kiểm tra thư mục trước, đừng ghi đè. Theo dõi:
+
+```bash
 qstat -u $USER
+tail -n 40 seed_exp1.o*
 ```
 
-Chỉ chạy **một tiến trình tại một thời điểm trên mỗi work-dir**, vì các job cùng work-dir
-dùng chung cache và file kết quả. Có thể chạy song song các arm nếu mỗi arm có work-dir riêng;
-việc này tính lặp teacher/cache và tăng dung lượng cần dùng.
+Smoke đạt khi thấy theo thứ tự: `SMOKE mode: temporal only ...`, `fg cache: ... lưới (16, 16, 16)`,
+`null positive vs orig: max|Δ| = 0.00e+00`, `Shared teacher views TRAIN`, `[seed_base_s0] epoch 0`,
+`[adaptive_pos_only_s0] epoch 0`, và cuối log có `Exit Status: 0`.
 
-## 2. Submit
+## 3. Chạy đầy đủ
 
-### 2.1 Smoke test nhỏ (khuyến nghị làm trước)
+Mỗi arm là một chuỗi job 3 giờ nối nhau. Cả ba arm dùng chung `WORK` nên **chạy nối tiếp**, không song song.
+
+| `ARM` | Bảng | Quét | Cố định |
+|---|---|---|---|
+| `adaptive_pos_only` | Only Pos | a_p = giá trị quét | a_n = 0.25 |
+| `adaptive_neg_only` | Only Neg | a_n = giá trị quét | a_p = 0.9 |
+| `adaptive_pos_neg` | Both | a_p = a_n = giá trị quét | không |
+
+Mỗi lần chạy gồm `seed_base` (= Base_fix, cùng a_p và a_n) và arm đang thử, nên so sánh công bằng.
 
 ```bash
-cd /scratch/hn98/$USER/Adaptive-SEED
-
-FULL_WORK=/scratch/hn98/$USER/runs/exp1
-SMOKE_WORK=/scratch/hn98/$USER/runs/exp1_smoke
-test -d "$FULL_WORK/VideoHallucer" || { echo "Thiếu $FULL_WORK/VideoHallucer"; exit 1; }
-mkdir -p "$SMOKE_WORK"
-if [ -e "$SMOKE_WORK/VideoHallucer" ] || [ -L "$SMOKE_WORK/VideoHallucer" ]; then
-  echo "Đích smoke đã tồn tại; kiểm tra trước, không ghi đè."
-  exit 1
-fi
-ln -s "$FULL_WORK/VideoHallucer" "$SMOKE_WORK/VideoHallucer"
-
-qsub -l walltime=00:30:00 \
-  -v ARM=adaptive_pos_only,VALUES=0.9,SMOKE_PAIRS=1,WORK="$SMOKE_WORK" \
-  scripts/run_exp1.pbs
+cd $CODE
+submit_chain() {   # submit_chain <ARM> <số job> [jobid-trước]
+  local arm=$1 n=$2 prev=${3:-} j i
+  for ((i = 0; i < n; i++)); do
+    if [ -z "$prev" ]; then
+      j=$(qsub -l walltime=03:00:00 -v ARM=$arm scripts/run_exp1.pbs)
+    else
+      j=$(qsub -l walltime=03:00:00 -W depend=afterany:$prev -v ARM=$arm scripts/run_exp1.pbs)
+    fi
+    prev=$j
+  done
+  echo "$prev"
+}
+LAST=$(submit_chain adaptive_pos_only 8)
+LAST=$(submit_chain adaptive_neg_only 8 $LAST)
+LAST=$(submit_chain adaptive_pos_neg 8 $LAST)
+echo "job cuối: $LAST"
 ```
 
-Smoke dùng 1 cặp train, 1 cặp validation, 1 cặp test; chỉ chạy `seed_base` và
-`adaptive_pos_only` tại ngưỡng 0.9, đồng thời tắt EventHallusion. Cache được tách khỏi full run.
-Đây chỉ là kiểm tra pipeline, không dùng accuracy smoke làm kết quả nghiên cứu.
+- `afterany` làm job sau chạy khi job trước kết thúc, kể cả bị hết walltime. Mọi công việc đã xong được
+  bỏ qua, nên job thừa tốn rất ít SU: ngưỡng đã có kết quả được log `SKIP (đã xong)`.
+- Số job mỗi arm (ở đây 8) chỉ là ước lượng. Đo thời gian thật từ log của job đầu, rồi tăng hoặc giảm.
+- Nếu có lỗi thật (không phải hết giờ), mọi job trong chuỗi sẽ lỗi nhanh. Xem log, sửa, rồi `qdel` phần còn lại.
 
-### 2.2 Chạy đầy đủ, ba job nối tiếp
-
-```bash
-J1=$(qsub -v ARM=adaptive_pos_only scripts/run_exp1.pbs)
-J2=$(qsub -W depend=afterok:$J1 -v ARM=adaptive_neg_only scripts/run_exp1.pbs)
-J3=$(qsub -W depend=afterok:$J2 -v ARM=adaptive_pos_neg scripts/run_exp1.pbs)
-echo $J1 $J2 $J3
-```
-
-Ý nghĩa từng arm (mỗi lần chạy gồm `seed_base` = Base_fix cùng a_p, a_n, và arm đang thử):
-
-| `ARM` | Quét | Giá trị cố định |
-|---|---|---|
-| `adaptive_pos_only` | a_p = giá trị quét | a_n = 0.25 |
-| `adaptive_neg_only` | a_n = giá trị quét | a_p = 0.9 |
-| `adaptive_pos_neg` | a_p = a_n = giá trị quét | không |
-
-### 2.3 Biến môi trường tuỳ chọn (truyền qua `qsub -v`, phân tách bằng dấu phẩy)
+### Biến tuỳ chọn (qua `qsub -v`, phân tách bằng dấu phẩy)
 
 | Biến | Mặc định | Ghi chú |
 |---|---|---|
-| `VALUES` | `0.25 0.5 0.75 0.9 1` | Chỉ chạy một phần ngưỡng, ví dụ `VALUES=0.5` |
+| `VALUES` | `0.25 0.5 0.75 0.9 1` | Ví dụ `VALUES="0.5 0.9"` (đặt trong dấu nháy) |
 | `FIXED_AP` | `0.9` | a_p khi chỉ quét a_n |
 | `FIXED_AN` | `0.25` | a_n khi chỉ quét a_p |
 | `TEACHER_FRAMES` | `32` | Số frame của teacher |
-| `WORK` | `/scratch/hn98/$USER/runs/exp1` | Work-dir; checkpoint và cache được lưu bên trong |
-| `SEED_CHECKPOINT_EVERY_STEPS` | `5` | Lưu train checkpoint mỗi số optimizer step này |
-| `SEED_EVAL_CHECKPOINT_EVERY` | `25` | Lưu tiến độ đánh giá mỗi số mẫu này |
+| `WORK` | `/scratch/hn98/$USER/runs/exp1` | Work-dir |
+| `SEED_CHECKPOINT_EVERY_STEPS` | `5` | Lưu checkpoint train mỗi số bước optimizer |
+| `SEED_EVAL_CHECKPOINT_EVERY` | `25` | Lưu tiến độ đánh giá mỗi số mẫu |
 
-Ví dụ: `qsub -v ARM=adaptive_pos_only,VALUES="0.25 0.5" scripts/run_exp1.pbs`
+### Chạy song song (tuỳ chọn, tốn thêm SU và dung lượng)
 
-Một ngưỡng với walltime 2 giờ; nếu bị walltime-kill, submit lại cùng lệnh và cùng WORK:
-
-```bash
-WORK=/scratch/hn98/$USER/runs/exp1_parallel/adaptive_pos_only
-qsub -l walltime=02:00:00 \
-  -v ARM=adaptive_pos_only,VALUES=0.25,WORK="$WORK" \
-  scripts/run_exp1.pbs
-```
-
-Job cần kết thúc thành công trước khi submit ngưỡng kế tiếp trong cùng WORK.
-
-## 3. Theo dõi
+Mỗi arm một work-dir riêng, mỗi work-dir tự tính lại teacher. Dựng work-dir bằng cùng các bước ở mục 1.4 và 1.6,
+rồi dùng chung mask foreground để khỏi tính lại (khoảng 14 phút mỗi work-dir):
 
 ```bash
-qstat -u $USER                      # Q = đang chờ, R = đang chạy, H = bị giữ (chờ job trước)
-tail -n 40 seed_exp1.o<jobid>       # log nằm ở thư mục đã submit
-qstat -fx <jobid> | grep -iE "estimated|comment|resources_used"
+SRC_FG=$WORK/cdt_distill_cache_f8_448/fg_81b255eaea
+for arm in adaptive_pos_only adaptive_neg_only adaptive_pos_neg; do
+  W=/scratch/hn98/$USER/runs/exp1_$arm
+  mkdir -p $W/VideoHallucer $W/cdt_distill_cache_f8_448
+  cp -rs $SRC_VH/temporal $SRC_VH/object_relation $W/VideoHallucer/
+  prep_eh $W
+  [ -e $W/cdt_distill_cache_f8_448/fg_81b255eaea ] || cp -rs $SRC_FG $W/cdt_distill_cache_f8_448/fg_81b255eaea
+done
 ```
 
-Các mốc cần thấy trong log, theo thứ tự:
+Submit mỗi arm với `WORK` riêng, ví dụ:
+
+```bash
+qsub -l walltime=03:00:00 -v ARM=adaptive_pos_only,WORK=/scratch/hn98/$USER/runs/exp1_adaptive_pos_only scripts/run_exp1.pbs
+```
+
+Thư mục `fg_81b255eaea` chỉ tồn tại sau khi một lần chạy đầy đủ trên `$WORK` đã xong bước mask.
+Tên này là hash cấu hình mask (32 frame); nếu đổi `TEACHER_FRAMES` thì tên khác.
+
+## 4. Theo dõi
+
+```bash
+qstat -u $USER            # Q = chờ, R = chạy, H = bị giữ (chờ job trước)
+qstat -xu $USER | tail    # job đã xong (F)
+tail -n 40 seed_exp1.o<jobid>
+qstat -fx <jobid> | grep -E "Exit_status|resources_used|comment"
+```
+
+Mốc cần thấy trong log, theo thứ tự:
 
 1. `student n_frames = 8 | teacher_frames = 32`
-2. `HF_HUB_OFFLINE=1: dùng dữ liệu local ...` và số cặp train/val/test khớp với chế độ chạy
+2. `HF_HUB_OFFLINE=1: dùng dữ liệu local ...` và `train 150 cặp | val 50 cặp | test 155 cặp`
 3. `EventHallusion: ... câu / ... video | thiếu: 0`
-4. `fg cache: ... | lưới (16, 16, 16)` (BiRefNet; lần đầu mất khoảng 30 phút cho cả VH và EH)
+4. `fg cache: ... | lưới (16, 16, 16)` (lần đầu mất khoảng 30 phút cho cả VideoHallucer và EventHallusion)
 5. `null positive vs orig: max|Δ| = 0.00e+00`
 6. Thanh `Shared teacher views TRAIN` (tính teacher 32 frame, chỉ một lần)
-7. `[seed_base_s0] epoch 0: {...}` rồi `[adaptive_pos_only_s0] epoch 0: {...}`
-8. Với mỗi ngưỡng, dòng `===== <ARM> | a_pos=... a_neg=... =====` mở đầu một lượt
+7. `[seed_base_s0] epoch 0: {...}` rồi `[<ARM>_s0] epoch 0: {...}`
+8. Mỗi ngưỡng bắt đầu bằng `===== <ARM> | a_pos=... a_neg=... =====`, hoặc `SKIP (đã xong)` nếu đã có kết quả
 
-Nếu một ngưỡng lỗi, `set -e` kết thúc job với trạng thái lỗi để job `afterok` kế tiếp không chạy nhầm.
-Xem log PBS của job để tìm traceback hoặc cấu hình gây lỗi.
+Khi job tiếp tục sau khi bị ngắt, log có dòng `resume checkpoint: epoch=..., next_sample=...`.
 
-```bash
-qstat -fx <jobid> | grep -iE 'Exit_status|comment|resources_used'
-```
+`test 155 cặp` (không phải 300) là bình thường: tổng chỉ có 376 cặp và code loại các cặp trùng video với train/val.
 
-## 4. Kết quả
-
-Mỗi cấu hình có một thư mục riêng:
+## 5. Kết quả từng cấu hình
 
 ```
-/scratch/hn98/$USER/runs/exp1/cdt_distill_cache_f8_448/seed_component_ablation/runs/ap<a>_an<b>_tf32/
+$WORK/cdt_distill_cache_f8_448/seed_component_ablation/runs/ap<a>_an<b>_tf32/
 ├── results.csv                    # q_acc, pair_acc, yes_rate, delta_pp, wrong_to_correct, correct_to_wrong
 ├── target_diagnostics_train.csv   # hệ số a_p, a_n thực tế theo từng mẫu train
 └── <arm>_s0_predictions.csv       # margin theo từng câu hỏi
 ```
 
-Các split trong `results.csv`: `VH_VAL`, `VH_TEST` (cột `pair_acc` có giá trị), `EH_ALL`,
-`eh_entire`, `eh_misleading`, `eh_mix`.
+Các `split` trong `results.csv`: `VH_VAL`, `VH_TEST` (có `pair_acc`), `EH_ALL`, `eh_entire`, `eh_misleading`, `eh_mix`.
+`wrong_to_correct` và `correct_to_wrong` đếm so với Qwen gốc (`base`), không phải so với `seed_base`.
 
-Gộp tất cả cấu hình thành một bảng để điền vào bảng báo cáo:
+Một ngưỡng xong khi `results.csv` của nó có cả dòng `seed_base_s0` và `<arm>_s0`:
+
+```bash
+grep -c "^adaptive_pos_only_s0," $WORK/cdt_distill_cache_f8_448/seed_component_ablation/runs/*/results.csv
+```
+
+## 6. Gộp bảng báo cáo
 
 ```bash
 source /scratch/hn98/$USER/venv/bin/activate
-python - <<'EOF'
-import glob, os, pandas as pd
-root = f"/scratch/hn98/{os.environ['USER']}/runs/exp1/cdt_distill_cache_f8_448/seed_component_ablation/runs"
-frames = []
-for f in sorted(glob.glob(f"{root}/*/results.csv")):
-    d = pd.read_csv(f)
-    d['config'] = os.path.basename(os.path.dirname(f))
-    frames.append(d)
-df = pd.concat(frames)
-keep = df[df.split.isin(['VH_TEST', 'EH_ALL'])]
-tab = keep.pivot_table(index=['config', 'run'], columns='split', values=['q_acc', 'pair_acc'], aggfunc='first')
-print(tab.round(4).to_string())
-df.to_csv(f"/scratch/hn98/{os.environ['USER']}/runs/exp1/all_results.csv", index=False)
-EOF
+python $CODE/scripts/collect_exp1.py --work $WORK
 ```
 
-So sánh Acc(adaptive) > Acc(Base_fix): với mỗi `config`, so hàng `adaptive_*_s0` với hàng `seed_base_s0`.
+Bảng in ra theo thứ tự cột: **VH pair acc, VH Q acc, EH acc**, tiếp theo là số câu đổi sai thành đúng và đúng thành sai
+(`VH w2c`, `VH c2w`, `EH w2c`, `EH c2w`). Mỗi ngưỡng có hai dòng, `Base_fix` và `Adaptive`, để so Acc(adaptive) > Acc(Base_fix).
+Bảng cũng được lưu ở `$WORK/exp1_table.csv`.
 
-## 5. Chạy lại và tiếp tục khi bị gián đoạn
+Dùng tập validation thay cho test: thêm `--vh-split VH_VAL`.
+Thiếu kết quả của ngưỡng nào thì dòng đó ghi `(missing results)`.
 
-- Teacher views được cache nguyên tử theo từng mẫu. Train checkpoint lưu LoRA weights,
-  optimizer/scheduler, epoch, vị trí mẫu, thứ tự mẫu và RNG state; mặc định lưu mỗi 5 optimizer step.
-- Sau khi train xong, adapter được lưu trước khi đánh giá. Tiến độ eval lưu mỗi 25 mẫu,
-  nên lần chạy lại tiếp tục phần eval còn thiếu.
-- Submit lại **đúng cùng `ARM`, `VALUES`, `WORK`** để nạp checkpoint. Nếu chạy một ngưỡng,
-  truyền `VALUES=<ngưỡng>`; các ngưỡng đã hoàn thành được bỏ qua nhờ cache adapter/results.
-- Nếu job bị walltime-kill, job phụ thuộc `afterok` sẽ không tự chạy. Kiểm tra log/exit status,
-  submit lại job bị dừng với cùng biến để tiếp tục, rồi mới chạy ngưỡng tiếp theo.
-- Checkpoint nằm dưới `WORK/cdt_distill_cache_f8_448/seed_component_ablation/students/`
-  trên scratch, không nằm ở `$TMPDIR` hay `jobfs`. Giữ nguyên WORK khi resume.
-- Sửa file `.py` trong `src/` làm thay đổi source fingerprint nên cache/student checkpoint cũ
-  không được dùng như kết quả của phiên bản code mới. Không xóa checkpoint/cache khi còn cần resume.
+## 7. Resume và chạy lại
 
-## 6. Xử lý lỗi thường gặp
+| Giai đoạn | Mức resume |
+|---|---|
+| Mask foreground | từng video |
+| Logit teacher (32 frame) | từng mẫu TRAIN |
+| Điểm `base` (Qwen gốc) | không; chỉ lưu khi xong cả tập (khoảng chục phút) |
+| Train student | mỗi 5 bước optimizer |
+| Đánh giá student | mỗi 25 mẫu |
+| Arm đã xong | cache adapter và margin |
+
+- Resume cần **đúng cùng `ARM`, `VALUES`, `WORK`** và **cùng mã nguồn**. Sửa file `.py` trong `src/` làm hash mã
+  nguồn đổi, nên cache logit teacher và student cũ không được nhận. Mask foreground không bị ảnh hưởng.
+- Nếu stage foreground báo lỗi `torch.load` sau một lần bị kill, file mask mới nhất có thể hỏng. Xoá nó rồi chạy lại:
+
+```bash
+ls -t $WORK/cdt_distill_cache_f8_448/fg_*/*.pt | head -1
+```
+
+- Không xoá `fg_*` và `seed_component_ablation/views_*` khi còn định chạy thêm: tính lại tốn nhiều giờ GPU.
+
+## 8. Xử lý lỗi thường gặp
 
 | Triệu chứng | Nguyên nhân / cách xử lý |
 |---|---|
-| `qsub: Job rejected ... queue` | Project không có quyền queue. Thử `-P jp09` trong file `.pbs`, giữ `storage=scratch/hn98+scratch/jp09` |
-| Job `Q` rất lâu | Hàng đợi H200 kín (120 GPU). Xem `qstat -Q gpuhopper`. Có thể đổi sang `dgxa100` (`ncpus=16`, `mem=120GB`) |
+| `Network is unreachable` ở stage `data.eventhallusion` | Work-dir thiếu `EventHallusion/questions/*.json`. Chạy `prep_eh <work-dir>` |
+| `EventHallusion thiếu N video` | Thiếu video trong `<work-dir>/EventHallusion/`. Tải bản đầy đủ (mục 1.5) rồi `prep_eh` |
+| `qsub: Job rejected ... queue` | Project không có quyền queue. Thử `-P jp09` trong `.pbs`, giữ `storage=scratch/hn98+scratch/jp09` |
+| Job `Q` rất lâu | Hàng đợi H200 kín (120 GPU). Xem `qstat -Q gpuhopper`; có thể đổi sang `dgxa100` (`ncpus=16`, `mem=120GB`) |
 | `/scratch/hn98: No such file` trong job | Thiếu `scratch/hn98` trong dòng `#PBS -l storage=` |
-| `Network is unreachable` / lỗi tải model | Node GPU không có Internet. Cần `HF_HUB_OFFLINE=1` và model đã nằm trong `$HF_HOME` |
-| `EventHallusion thiếu N video` | Thiếu video trong `$W/EventHallusion/`. Dựng lại bằng `cp -rs` từ bản đầy đủ (xem mục 1) |
-| `Disk quota exceeded` | Home đầy (10 GB). Kiểm tra `quota -s`; đặt cache vào `/scratch` |
-| Hết walltime | Tăng `#PBS -l walltime`, submit lại, phần đã cache được dùng lại |
-| Job sau bị `H` mãi | Job trước thất bại nên `afterok` không thoả. `qdel` job bị giữ và submit lại |
+| Lỗi tải model khi chạy | Node GPU không có Internet. Cần model nằm sẵn trong `$HF_HOME`, kèm `HF_HUB_OFFLINE=1` |
+| `Disk quota exceeded` | Home đầy (10 GB). Kiểm tra `quota -s`; chuyển cache sang `/scratch` |
+| Hết walltime | Bình thường với job 3 giờ; job kế tiếp trong chuỗi tiếp tục từ checkpoint |
+| Job sau bị `H` mãi | Phụ thuộc không thoả. `qdel` job bị giữ và submit lại |
+| `git pull` không chạy được trong job | Node GPU không có Internet; chỉ `git pull` ở login node |
 
-Dừng một job:
+Dừng một job: `qdel <jobid>`. Dừng cả chuỗi: `qdel $(qselect -u $USER -N seed_exp1)`.
 
-```bash
-qdel <jobid>
-```
-
-## 7. Dọn dẹp
-
-Sau khi lấy xong kết quả, kiểm tra dung lượng của project:
+## 9. Dọn dẹp
 
 ```bash
 lquota
-du -sh /scratch/hn98/$USER/runs/exp1/cdt_distill_cache_f8_448/*
+du -sh $WORK/cdt_distill_cache_f8_448/*
 ```
-
-Không xoá thư mục `fg_*` và `seed_component_ablation/views_*` nếu còn định chạy thêm ngưỡng,
-vì tính lại tốn nhiều giờ GPU.

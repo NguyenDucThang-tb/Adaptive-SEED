@@ -46,6 +46,12 @@ for v in $VALUES; do
     adaptive_pos_neg)  AP=$v;        AN=$v ;;
     *) echo "ARM không hợp lệ: $ARM"; exit 2 ;;
   esac
+  TAG="ap$(printf '%g' "$AP")_an$(printf '%g' "$AN")_tf${TEACHER_FRAMES}"
+  RESULTS="$WORK/cdt_distill_cache_f8_448/seed_component_ablation/runs/$TAG/results.csv"
+  if grep -qs "^${ARM}_s0," "$RESULTS"; then
+    echo "===== SKIP (đã xong): $ARM | $TAG ====="
+    continue
+  fi
   echo "===== $ARM | a_pos=$AP a_neg=$AN | $(date) ====="
   # seed_base cùng (a_pos, a_neg) là Base_fix để so sánh công bằng.
   python -m seed_video --stage core --work-dir "$WORK" \
