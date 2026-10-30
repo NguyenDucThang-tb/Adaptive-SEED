@@ -110,6 +110,17 @@ def component_step(runtime, name):
         return (kd + ce, dict(rkl=float(kd.detach()), ce=float(ce.detach())))
     return step
 
+def save_results(runtime):
+    """Merge ROWS into RES/results.csv: runs from other arms sharing this (a_pos, a_neg) config are kept."""
+    path = runtime.RES / 'results.csv'
+    new = runtime.pd.DataFrame(runtime.ROWS)
+    if path.exists():
+        old = runtime.pd.read_csv(path)
+        new = runtime.pd.concat([old[~old['run'].isin(set(new['run']))], new], ignore_index=True)
+    temp = path.with_name(path.name + f'.tmp.{runtime.os.getpid()}')
+    new.to_csv(temp, index=False)
+    runtime.os.replace(temp, path)
+
 def student_cfg(runtime, name, seed):
     d = runtime._old_student_cfg(name, seed)
     d.update(source=runtime.SOURCE_HASH, abl=runtime.ABL, flags=runtime.ARMS[name], teacher=runtime.BASE_TEACHER, train_content=[runtime.item_sig(i) for i in runtime.TRAIN], eval_content=[runtime.item_sig(i) for i in runtime.eval_set()], confidence_cuts=runtime._qt.tolist(), target_digest=runtime.hashlib.sha256(b''.join((runtime.TARGETS_ABL[name][runtime.key(i)].numpy().tobytes() for i in runtime.TRAIN))).hexdigest())
@@ -211,6 +222,7 @@ def run(runtime):
     for runtime.sub in sorted({i['subset'] for i in runtime.EH}):
         runtime.SPLITS[runtime.sub] = [i for i in runtime.EH if i['subset'] == runtime.sub]
     runtime.result_rows = MethodType(result_rows, runtime)
+    runtime.save_results = MethodType(save_results, runtime)
     runtime.ROWS = runtime.result_rows('base', runtime.MARG['base'])
     for runtime.name in runtime.ARM_RUN:
         for runtime.seed in runtime.ABL['seeds']:
@@ -220,7 +232,7 @@ def run(runtime):
             runtime.rows = runtime.result_rows(runtime.tag, runtime.out['marg'])
             runtime.ROWS.extend(runtime.rows)
             runtime.display(runtime.pd.DataFrame(runtime.rows))
-            runtime.pd.DataFrame(runtime.ROWS).to_csv(runtime.RES / 'results.csv', index=False)
+            runtime.save_results()
             runtime.pd.DataFrame([dict(id=runtime.key(i), video=i['video'], question=i['question'], answer=i['answer'], base_margin=runtime.MARG['base'][runtime.key(i)], student_margin=runtime.out['marg'][runtime.key(i)]) for i in runtime.eval_set()]).to_csv(runtime.RES / f'{runtime.tag}_predictions.csv', index=False)
             runtime.gc.collect()
             runtime.torch.cuda.empty_cache()
