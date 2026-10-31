@@ -63,19 +63,21 @@ pip install -r $CODE/requirements.txt
 pip list 2>/dev/null | grep -iE "^(torch|transformers|peft) "
 ```
 
-Cần `transformers 4.51.3` và `peft 0.15.2`. Repo không có `pyproject.toml`; code chạy bằng `PYTHONPATH=src`
+Cần `transformers >=4.57.0,<5` và `peft 0.15.2` cho Qwen3-VL. Repo không có `pyproject.toml`; code chạy bằng `PYTHONPATH=src`
 (file `.pbs` đã đặt sẵn).
 
 ### 1.3 Model (tải ở login node)
 
 ```bash
-huggingface-cli download Qwen/Qwen2.5-VL-7B-Instruct
+huggingface-cli download Qwen/Qwen3-VL-8B-Instruct
 huggingface-cli download ZhengPeng7/BiRefNet
 ls $HF_HOME/hub
 ```
 
-Phải thấy `models--Qwen--Qwen2.5-VL-7B-Instruct` (khoảng 16 GB) và `models--ZhengPeng7--BiRefNet`.
+Phải thấy `models--Qwen--Qwen3-VL-8B-Instruct` và `models--ZhengPeng7--BiRefNet`.
 Nên chạy trong `screen -S dl` để không mất khi rớt SSH.
+
+Qwen3-VL dùng vision patch stride 32 và model class riêng. Không tiếp tục dùng venv Transformers 4.51.3; tạo venv mới hoặc nâng cấp môi trường trước khi submit job. `config.py` mặc định đã chọn Qwen3-VL-8B-Instruct. Model change làm thay đổi cache key và fingerprint, vì vậy kết quả/checkpoint Qwen2.5 cũ không được resume vào run Qwen3.
 
 ### 1.4 Dữ liệu VideoHallucer
 

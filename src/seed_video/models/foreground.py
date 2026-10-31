@@ -35,7 +35,8 @@ def run(runtime):
     runtime.AutoModelForImageSegmentation = AutoModelForImageSegmentation
     from torchvision import transforms
     runtime.transforms = transforms
-    runtime.FG_GRID = (runtime.CFG['teacher_frames'] // 2, runtime.CFG['frame_size'] // 28, runtime.CFG['frame_size'] // 28)
+    stride = runtime.CFG['spatial_stride']
+    runtime.FG_GRID = (runtime.CFG['teacher_frames'] // 2, runtime.CFG['frame_size'] // stride, runtime.CFG['frame_size'] // stride)
     runtime.MASK_CFG = dict(algo='fg_birefnet_v1', birefnet=runtime.CFG['birefnet_id'], bir_res=1024, n_frames=runtime.CFG['teacher_frames'], frame_size=runtime.CFG['frame_size'], grid=runtime.FG_GRID, kernel=runtime.CFG['fg_kernel'], avg_weight=runtime.CFG['fg_avg_weight'])
     runtime.MASK_TAG = runtime.cfg_hash(runtime.MASK_CFG)
     runtime.os.makedirs(f'{runtime.CACHE}/fg_{runtime.MASK_TAG}', exist_ok=True)

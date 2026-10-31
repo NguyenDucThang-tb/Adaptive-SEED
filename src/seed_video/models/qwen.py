@@ -2,6 +2,17 @@
 from types import MethodType
 from seed_video.components.positive import feature_enhance, random_like_mask
 
+MODEL_SPECS = {
+    'Qwen/Qwen2.5-VL-7B-Instruct': ('Qwen2_5_VLForConditionalGeneration', 28),
+    'Qwen/Qwen3-VL-8B-Instruct': ('Qwen3VLForConditionalGeneration', 32),
+}
+
+def model_spec(model_id):
+    try:
+        return MODEL_SPECS[model_id]
+    except KeyError as exc:
+        raise ValueError(f'Unsupported Qwen model: {model_id}') from exc
+
 def build_inputs(runtime, frames, question, fps, yn=True):
     msgs = [{'role': 'user', 'content': [{'type': 'video'}, {'type': 'text', 'text': question.strip() + ('\nAnswer with yes or no.' if yn else '')}]}]
     text = runtime.processor.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True)
@@ -46,11 +57,15 @@ def margin(runtime, l):
     return (l[runtime.YES].float() - l[runtime.NO].float()).item()
 
 def run(runtime):
-    from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
+    from transformers import AutoProcessor
+    model_class_name, runtime.CFG['spatial_stride'] = model_spec(runtime.CFG['model_id'])
+    if model_class_name == 'Qwen3VLForConditionalGeneration':
+        from transformers import Qwen3VLForConditionalGeneration as ModelClass
+    else:
+        from transformers import Qwen2_5_VLForConditionalGeneration as ModelClass
     runtime.AutoProcessor = AutoProcessor
-    runtime.Qwen2_5_VLForConditionalGeneration = Qwen2_5_VLForConditionalGeneration
     runtime.processor = runtime.AutoProcessor.from_pretrained(runtime.CFG['model_id'])
-    runtime.model = runtime.Qwen2_5_VLForConditionalGeneration.from_pretrained(runtime.CFG['model_id'], torch_dtype=runtime.torch.bfloat16, attn_implementation='sdpa', device_map='cuda').eval()
+    runtime.model = ModelClass.from_pretrained(runtime.CFG['model_id'], torch_dtype=runtime.torch.bfloat16, attn_implementation='sdpa', device_map='cuda').eval()
     runtime.model.requires_grad_(False)
 
     class SliceHead(runtime.torch.nn.Module):
@@ -80,7 +95,10 @@ def run(runtime):
     runtime.YES = runtime.tok.encode('Yes', add_special_tokens=False)[0]
     runtime.NO = runtime.tok.encode('No', add_special_tokens=False)[0]
     runtime.VID_TOK = getattr(runtime.model.config, 'video_token_id', None) or runtime.tok.convert_tokens_to_ids('<|video_pad|>')
-    runtime.VISUAL = runtime.model.visual if hasattr(runtime.model, 'visual') else runtime.model.model.visual
+    backbone = getattr(runtime.model, 'model', runtime.model)
+    runtime.VISUAL = getattr(runtime.model, 'visual', getattr(backbone, 'visual', None))
+    if runtime.VISUAL is None or not hasattr(runtime.VISUAL, 'merger'):
+        raise RuntimeError('Could not locate the Qwen vision merger for visual-feature hook.')
     runtime.random_like_mask = MethodType(random_like_mask, runtime)
     runtime.feature_enhance = MethodType(feature_enhance, runtime)
 
@@ -104,7 +122,7 @@ def run(runtime):
     runtime.hook = runtime.FEHook()
     if '_h' in vars(runtime):
         runtime._h.remove()
-    runtime._h = runtime.VISUAL.register_forward_hook(runtime.hook)
+    runtime._h = runtime.VISUAL.merger.register_forward_hook(runtime.hook)
     runtime.build_inputs = MethodType(build_inputs, runtime)
     runtime.with_response = MethodType(with_response, runtime)
     runtime.fwd_view = MethodType(fwd_view, runtime)

@@ -13,7 +13,7 @@ pip install -e .
 seed-video --help
 ```
 
-`transformers==4.51.3`, `peft==0.15.2` được giữ từ notebook. Các dependency còn lại chưa được khóa thành môi trường tái lập đầy đủ. Nếu môi trường Colab có torchao cũ gây lỗi PEFT, gỡ phiên bản torchao xung đột trước. Dataset/model được tải khi chạy; cần Internet và đủ dung lượng lưu trữ.
+Mặc định dùng `Qwen/Qwen3-VL-8B-Instruct`, cần `transformers>=4.57.0,<5` và `peft==0.15.2`. Qwen2.5-VL-7B vẫn được hỗ trợ bằng cách đổi `model_id` trong `config.py`. Nếu môi trường Colab có torchao cũ gây lỗi PEFT, gỡ phiên bản torchao xung đột trước. Dataset/model được tải khi chạy; cần Internet và đủ dung lượng lưu trữ.
 
 ## Chạy
 
@@ -47,7 +47,7 @@ Có thể dùng `python -m seed_video` thay `seed-video`. Thêm `--no-eh` để 
 | `data/eventhallusion.py` | Nạp và kiểm tra benchmark ngoài |
 | `data/video.py` | Decode frame, tạo view orig/TCD/shuffle/noise |
 | `models/foreground.py` | BiRefNet và cache foreground |
-| `models/qwen.py` | Qwen, visual hook, forward theo view |
+| `models/qwen.py` | Qwen2.5/Qwen3, visual-merger hook, forward theo view |
 | `components/adaptive.py` | Hệ số adaptive từ answer gain |
 | `components/gates.py` | JSD, pair gate, correct-answer margin |
 | `components/positive.py` | Feature Enhance và mask ngẫu nhiên |

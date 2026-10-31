@@ -1,6 +1,6 @@
 torch>=2.5
 torchvision>=0.20
-transformers==4.51.3
+transformers>=4.57.0,<5
 peft==0.15.2
 accelerate
 huggingface_hub

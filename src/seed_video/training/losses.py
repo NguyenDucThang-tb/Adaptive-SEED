@@ -165,7 +165,7 @@ def run(runtime):
     runtime.get_peft_model = get_peft_model
     from transformers import get_cosine_schedule_with_warmup
     runtime.get_cosine_schedule_with_warmup = get_cosine_schedule_with_warmup
-    runtime.LORA_TARGETS = '(.*\\.layers\\.\\d+\\.self_attn\\.(q|k|v|o)_proj)|(.*visual\\.merger\\.mlp\\.(0|2))'
+    runtime.LORA_TARGETS = '(.*\\.layers\\.\\d+\\.self_attn\\.(q|k|v|o)_proj)|(.*visual\\.merger\\.(mlp\\.(0|2)|linear_fc[12]))'
     runtime.kl = MethodType(kl, runtime)
     runtime.rkl = MethodType(rkl, runtime)
     runtime.jsd = MethodType(jsd, runtime)
