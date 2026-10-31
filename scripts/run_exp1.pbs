@@ -34,7 +34,9 @@ module load python3/3.11.7 cuda/12.3.2
 PYTHON_ENV="${PYTHON_ENV:-/scratch/hn98/$USER/venv}"
 source "$PYTHON_ENV/bin/activate"
 
-export HF_HOME=/scratch/hn98/$USER/hf_cache
+HF_HOME="${HF_HOME:-/scratch/hn98/$USER/hf_cache}"
+export HF_HOME
+export HF_HUB_CACHE="${HF_HUB_CACHE:-$HF_HOME/hub}"
 export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
 export SEED_CHECKPOINT_EVERY_STEPS="${SEED_CHECKPOINT_EVERY_STEPS:-5}"
 export SEED_EVAL_CHECKPOINT_EVERY="${SEED_EVAL_CHECKPOINT_EVERY:-25}"
