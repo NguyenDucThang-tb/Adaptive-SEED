@@ -31,7 +31,8 @@ if [[ -n "${SMOKE_PAIRS:-}" ]]; then
 fi
 
 module load python3/3.11.7 cuda/12.3.2
-source /scratch/hn98/$USER/venv/bin/activate
+PYTHON_ENV="${PYTHON_ENV:-/scratch/hn98/$USER/venv}"
+source "$PYTHON_ENV/bin/activate"
 
 export HF_HOME=/scratch/hn98/$USER/hf_cache
 export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
