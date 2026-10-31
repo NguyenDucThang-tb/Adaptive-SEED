@@ -17,6 +17,20 @@ def build_inputs(runtime, frames, question, fps, yn=True):
     msgs = [{'role': 'user', 'content': [{'type': 'video'}, {'type': 'text', 'text': question.strip() + ('\nAnswer with yes or no.' if yn else '')}]}]
     text = runtime.processor.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True)
     vid = runtime.torch.from_numpy(runtime.np.stack([runtime.np.asarray(f) for f in frames])).permute(0, 3, 1, 2)
+    if runtime.CFG['model_id'] == 'Qwen/Qwen3-VL-8B-Instruct':
+        metadata = [{
+            'total_num_frames': len(frames),
+            'fps': fps,
+            'duration': len(frames) / fps,
+            'frames_indices': list(range(len(frames))),
+        }]
+        return runtime.processor(
+            text=[text],
+            videos=[vid],
+            video_metadata=metadata,
+            do_sample_frames=False,
+            return_tensors='pt',
+        )
     try:
         return runtime.processor(text=[text], videos=[vid], fps=fps, return_tensors='pt')
     except TypeError:
