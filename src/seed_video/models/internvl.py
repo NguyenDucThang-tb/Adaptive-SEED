@@ -53,6 +53,13 @@ def with_response(runtime, inp, resp):
     return runtime.BatchFeature(data=out)
 
 
+def generate_response(runtime, inp, **kwargs):
+    # InternVL uses image_flags in forward, but its generate API does not accept it.
+    generation_inputs = dict(inp)
+    generation_inputs.pop("image_flags", None)
+    return runtime.model.generate(**generation_inputs, **kwargs)
+
+
 def get_feature_grid(runtime, inp):
     frame_count = int(inp["image_flags"].shape[0])
     token_grid = runtime.CFG["frame_size"] // runtime.CFG["spatial_stride"]
@@ -172,6 +179,7 @@ def run(runtime):
     runtime.feature_enhance = MethodType(feature_enhance, runtime)
     runtime.build_inputs = MethodType(build_inputs, runtime)
     runtime.with_response = MethodType(with_response, runtime)
+    runtime.generate_response = MethodType(generate_response, runtime)
     runtime.get_feature_grid = MethodType(get_feature_grid, runtime)
     runtime.fwd_view = MethodType(fwd_view, runtime)
     runtime.adapter_off = MethodType(adapter_off, runtime)

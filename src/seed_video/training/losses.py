@@ -46,8 +46,20 @@ def sample_response(runtime, it, ctx):
     fr, fps, _ = runtime.view_frames(it, 'orig')
     inp = runtime.build_inputs(fr, q or it['question'], fps, yn=q is None).to(runtime.DEV)
     runtime.model.eval()
+    generate = getattr(runtime, 'generate_response', None)
     with runtime.torch.no_grad(), runtime.keep_last(1):
-        gen = runtime.model.generate(**inp, max_new_tokens=runtime.CFG['open_max_new'] if open_q else runtime.CFG['yn_max_new'], do_sample=True, temperature=runtime.CFG['gen_temp'], top_p=1.0, top_k=0, repetition_penalty=1.0)
+        generation_kwargs = dict(
+            max_new_tokens=runtime.CFG['open_max_new'] if open_q else runtime.CFG['yn_max_new'],
+            do_sample=True,
+            temperature=runtime.CFG['gen_temp'],
+            top_p=1.0,
+            top_k=0,
+            repetition_penalty=1.0,
+        )
+        if generate:
+            gen = generate(inp, **generation_kwargs)
+        else:
+            gen = runtime.model.generate(**inp, **generation_kwargs)
     runtime._reset_rope(runtime.model)
     return (q, open_q, gen[0, inp['input_ids'].shape[1]:])
 

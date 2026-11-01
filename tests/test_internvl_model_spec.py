@@ -2,10 +2,35 @@ import unittest
 from types import SimpleNamespace
 
 from seed_video.models import model_spec
-from seed_video.models.internvl import get_feature_grid, model_spec as internvl_model_spec
+from seed_video.models.internvl import (
+    generate_response,
+    get_feature_grid,
+    model_spec as internvl_model_spec,
+)
 
 
 class InternVLModelSpecTests(unittest.TestCase):
+    def test_generation_drops_image_flags_but_preserves_forward_inputs(self):
+        class Model:
+            def generate(self, **kwargs):
+                return kwargs
+
+        runtime = SimpleNamespace(model=Model())
+        inputs = {
+            "input_ids": [1, 2],
+            "pixel_values": [3],
+            "attention_mask": [1, 1],
+            "image_flags": [1],
+        }
+
+        result = generate_response(runtime, inputs, max_new_tokens=4)
+
+        self.assertNotIn("image_flags", result)
+        self.assertEqual(result["input_ids"], [1, 2])
+        self.assertEqual(result["pixel_values"], [3])
+        self.assertEqual(result["max_new_tokens"], 4)
+        self.assertIn("image_flags", inputs)
+
     def test_internvl35_8b_uses_one_frame_per_visual_grid(self):
         model_id = "OpenGVLab/InternVL3_5-8B-Instruct"
         self.assertEqual(model_spec(model_id), ("InternVLChatModel", 28))
