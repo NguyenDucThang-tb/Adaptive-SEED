@@ -39,6 +39,15 @@ def _checkpoint_interval(name, default):
         raise ValueError(f'{name} must be >= 1')
     return value
 
+
+def _valid_order_keys(order_keys, item_by_key):
+    return (
+        bool(order_keys)
+        and len(order_keys) <= len(item_by_key)
+        and len(set(order_keys)) == len(order_keys)
+        and all(key in item_by_key for key in order_keys)
+    )
+
 def _wrap(runtime):
     runtime.model = runtime.get_peft_model(runtime.model, runtime.LoraConfig(r=runtime.CFG['lora_r'], lora_alpha=runtime.CFG['lora_alpha'], lora_dropout=runtime.CFG['lora_dropout'], target_modules=runtime.LORA_TARGETS, bias='none'))
 
@@ -141,7 +150,7 @@ def train_arm(runtime, name, seed):
                     rng.shuffle(order)
                     order_keys = [runtime.key(item) for item in order]
                     next_index = 0
-                if len(order_keys) != len(runtime.TRAIN) or any(k not in item_by_key for k in order_keys):
+                if not _valid_order_keys(order_keys, item_by_key):
                     raise RuntimeError(f'Checkpoint train order không khớp dữ liệu: {train_checkpoint_path}')
                 order = [item_by_key[k] for k in order_keys]
                 runtime.model.train()

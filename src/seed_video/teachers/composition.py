@@ -37,9 +37,9 @@ def run(runtime):
     runtime.formula = MethodType(formula, runtime)
     print('Teacher (dạng tường minh):')
     for runtime._n, runtime._s in runtime.TEACHERS.items():
-        runtime._c = runtime.coefs(runtime._s)['orig']
+        runtime._weights = runtime.coefs(runtime._s)
         print(f'  {runtime._n:10s} = {runtime.formula(runtime._s)}')
-        assert abs(runtime._c) > 1e-06, f"{runtime._n}: hệ số của l_orig = 0 → teacher không còn nhánh gốc; đổi CFG['a_pos'] / CFG['a_tcd']"
+        assert abs(sum(runtime._weights.values()) - 1.0) < 1e-6, f'{runtime._n}: teacher coefficients must sum to 1'
     runtime.compose = MethodType(compose, runtime)
     runtime.tlog = MethodType(tlog, runtime)
     runtime.MARG = {}

@@ -112,7 +112,10 @@ def step_opsd(runtime, T):
     return f
 
 def tvdf_select(runtime, T):
-    tau = float(runtime.np.median([abs(runtime.MARG[f'{T}_soft'][runtime.key(i)]) for i in runtime.TRAIN]))
+    tau = float(runtime.np.median([
+        abs(runtime.margin(runtime.tlog(runtime.key(i), T)))
+        for i in runtime.TRAIN
+    ]))
 
     def sel(items, ep):
         if ep == 0:

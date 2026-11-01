@@ -12,8 +12,15 @@ def main(argv=None):
     parser.add_argument("--work-dir", type=Path, default=Path("runs/seed_full"))
     parser.add_argument("--stage", choices=["core", "no-caption", "full", "all"], default="all")
     parser.add_argument("--no-eh", action="store_true")
-    parser.add_argument("--a-pos", type=float, default=None, help="Max positive coefficient a_p in (0, 1]; default 0.9")
-    parser.add_argument("--a-neg", type=float, default=None, help="Max negative (TCD) coefficient a_n in (0, 1]; default 0.25")
+    parser.add_argument("--a-pos", type=float, default=None, help="Max positive coefficient a_p in [0, 1]; default 0.9")
+    parser.add_argument("--a-neg", type=float, default=None, help="Max negative (TCD) coefficient a_n in [0, 1]; default 0.25")
+    parser.add_argument(
+        "--distill-methods",
+        nargs="+",
+        choices=["kd_basic", "video_opd", "seed"],
+        default=None,
+        help="Compare these distillation losses in the components experiment.",
+    )
     parser.add_argument("--teacher-frames", type=int, default=None,
                         help="Frames decoded for teacher branches (orig, orig+fg, tcd, seednoise); default = student n_frames (8)")
     parser.add_argument("--smoke-pairs", type=int, default=None,

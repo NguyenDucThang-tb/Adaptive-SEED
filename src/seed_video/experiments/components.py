@@ -170,6 +170,10 @@ def run(runtime):
     assert runtime.coverage, 'No eligible pair samples. Add verified pi metadata or use direction_proxy.'
     runtime._conf = {k: runtime.torch.log_softmax(r['orig'], 0).max().item() for k, r in runtime.SHARED.items()}
     runtime._qt = runtime.np.quantile(list(runtime._conf.values()), runtime.np.linspace(0, 1, runtime.CFG['seed_groups'] + 1)[1:-1])
+    if getattr(runtime.args, 'distill_methods', None):
+        from seed_video.experiments.distillation import run as run_distillation
+        run_distillation(runtime, runtime.args.distill_methods)
+        return
     runtime.TARGETS_ABL = {}
     runtime.AUDIT = []
     for runtime.name, runtime.flags in runtime.ARMS.items():
