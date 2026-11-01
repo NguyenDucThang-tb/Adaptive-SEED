@@ -3,22 +3,37 @@ from types import SimpleNamespace
 
 from seed_video.experiments.distillation import method_registry
 from seed_video.teachers.composition import coefs
+from seed_video.training.losses import _teacher_answer_correct, _tvdf_rank_reliable
 
 
 class DistillationMethodTests(unittest.TestCase):
-    def test_registry_exposes_kd_video_opd_and_seed(self):
+    def test_registry_exposes_kd_and_video_opd_adaptation(self):
         runtime = SimpleNamespace(
             step_kd_basic=lambda teacher: f"kd:{teacher}",
             step_onpolicy=lambda teacher, divergence: f"opd:{teacher}:{divergence}",
-            step_seed=lambda teacher, use_gt: f"seed:{teacher}:{use_gt}",
             tvdf_select=lambda teacher: f"tvdf:{teacher}",
         )
-        registry = method_registry(runtime, ["kd_basic", "video_opd", "seed"])
+        registry = method_registry(runtime, ["kd_basic", "video_opd"])
 
         self.assertEqual(registry["kd_basic@T_pos_tcd"][0](), "kd:T_pos_tcd")
         self.assertEqual(registry["video_opd@T_pos_tcd"][0](), "opd:T_pos_tcd:rkl")
         self.assertEqual(registry["video_opd@T_pos_tcd"][2](), "tvdf:T_pos_tcd")
-        self.assertEqual(registry["seed@T_pos_tcd"][0](), "seed:T_pos_tcd:True")
+        self.assertFalse(registry["video_opd@T_pos_tcd"][3])
+
+    def test_registry_does_not_claim_unavailable_seed_implementation(self):
+        runtime = SimpleNamespace(step_kd_basic=lambda teacher: None)
+        with self.assertRaisesRegex(ValueError, "Unsupported distillation method: seed"):
+            method_registry(runtime, ["seed"])
+
+    def test_tvdf_reliability_uses_teacher_answer_against_label(self):
+        self.assertTrue(_teacher_answer_correct(0.2, "yes"))
+        self.assertTrue(_teacher_answer_correct(-0.2, "no"))
+        self.assertFalse(_teacher_answer_correct(-0.2, "yes"))
+
+    def test_tvdf_keeps_high_disagreement_only_from_reliable_rows(self):
+        rows = [(0.1, "low"), (0.8, "high"), (0.4, "mid")]
+        self.assertEqual(_tvdf_rank_reliable(rows, 0.5), [(0.8, "high"), (0.4, "mid")])
+        self.assertEqual(_tvdf_rank_reliable([], 0.5), [])
 
     def test_teacher_coefficients_allow_single_branch_edges(self):
         pos_only = coefs(SimpleNamespace(), {

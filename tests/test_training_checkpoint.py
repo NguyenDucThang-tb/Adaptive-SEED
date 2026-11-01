@@ -23,11 +23,13 @@ class TrainingCheckpointTests(unittest.TestCase):
         items = {"a": object(), "b": object(), "c": object()}
         self.assertTrue(_valid_order_keys(["a", "c"], items))
 
+    def test_training_order_accepts_empty_filtered_subset(self):
+        self.assertTrue(_valid_order_keys([], {"a": object()}))
+
     def test_training_order_rejects_unknown_or_duplicate_keys(self):
         items = {"a": object(), "b": object()}
         self.assertFalse(_valid_order_keys(["a", "missing"], items))
         self.assertFalse(_valid_order_keys(["a", "a"], items))
-        self.assertFalse(_valid_order_keys([], items))
 
     def test_atomic_save_replaces_target_and_leaves_no_temp_file(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -1,10 +1,10 @@
-"""Compare standard KD, Video OPD, and SEED under the same teacher setup."""
+"""Compare answer-level KD with a Video-OPD-inspired on-policy adaptation."""
 from types import MethodType
 
 from seed_video.evaluation.reporting import result_rows
 
 
-METHODS = ("kd_basic", "video_opd", "seed")
+METHODS = ("kd_basic", "video_opd")
 TEACHER = "T_pos_tcd"
 
 
@@ -17,12 +17,9 @@ def method_registry(runtime, methods, teacher=TEACHER):
         elif method == "video_opd":
             step = lambda T=teacher: runtime.step_onpolicy(T, "rkl")
             selector = lambda T=teacher: runtime.tvdf_select(T)
-        elif method == "seed":
-            step = lambda T=teacher: runtime.step_seed(T, True)
-            selector = None
         else:
             raise ValueError(f"Unsupported distillation method: {method}")
-        registry[f"{method}@{teacher}"] = (step, teacher, selector, method == "seed")
+        registry[f"{method}@{teacher}"] = (step, teacher, selector, False)
     return registry
 
 
@@ -56,8 +53,7 @@ def run(runtime, methods):
     runtime.METHODS.update(method_registry(runtime, methods))
 
     tag = f"ap{runtime.CFG['a_pos']:g}_an{runtime.CFG['a_tcd']:g}_tf{runtime.CFG['teacher_frames']}"
-    if getattr(runtime.args, "smoke_pairs", None) is None:
-        runtime.CFG["epochs"] = 2
+    runtime.CFG["epochs"] = 2
     runtime.OUT = runtime.Path(runtime.CACHE) / "distillation_methods"
     runtime.RES = runtime.OUT / "runs" / tag
     runtime.STUDENT_DIR = str(runtime.RES / "students")

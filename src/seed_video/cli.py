@@ -17,7 +17,7 @@ def main(argv=None):
     parser.add_argument(
         "--distill-methods",
         nargs="+",
-        choices=["kd_basic", "video_opd", "seed"],
+        choices=["kd_basic", "video_opd"],
         default=None,
         help="Compare these distillation losses in the components experiment.",
     )

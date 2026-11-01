@@ -42,8 +42,7 @@ def _checkpoint_interval(name, default):
 
 def _valid_order_keys(order_keys, item_by_key):
     return (
-        bool(order_keys)
-        and len(order_keys) <= len(item_by_key)
+        len(order_keys) <= len(item_by_key)
         and len(set(order_keys)) == len(order_keys)
         and all(key in item_by_key for key in order_keys)
     )
@@ -136,6 +135,8 @@ def train_arm(runtime, name, seed):
                 opt_steps = checkpoint['opt_steps']
                 log = checkpoint['log']
                 train_min = float(checkpoint.get('train_elapsed_sec', 0.0)) / 60
+                if hasattr(runtime, 'restore_method_state'):
+                    runtime.restore_method_state(checkpoint.get('method_state'))
                 _restore_training_rng_state(runtime, rng, checkpoint['rng'])
                 print(
                     f'[{tag}] resume checkpoint: epoch={epoch}, '
@@ -183,6 +184,7 @@ def train_arm(runtime, name, seed):
                                 log=log,
                                 train_elapsed_sec=train_min * 60 + runtime.time.time() - started,
                                 rng=_training_rng_state(runtime, rng),
+                                method_state=runtime.capture_method_state() if hasattr(runtime, 'capture_method_state') else None,
                             ), train_checkpoint_path)
 
                 d = runtime.pd.DataFrame(log)
@@ -203,6 +205,7 @@ def train_arm(runtime, name, seed):
                     log=log,
                     train_elapsed_sec=train_min * 60 + runtime.time.time() - started,
                     rng=_training_rng_state(runtime, rng),
+                    method_state=runtime.capture_method_state() if hasattr(runtime, 'capture_method_state') else None,
                 ), train_checkpoint_path)
 
             train_min += (runtime.time.time() - started) / 60

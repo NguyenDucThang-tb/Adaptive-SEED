@@ -1,4 +1,5 @@
 """training: losses stage. Explicit run-scoped state; import has no GPU or I/O side effects."""
+import math
 from types import MethodType
 
 def kl(runtime, t, s, T=1.0):
@@ -40,8 +41,8 @@ def _reset_rope(runtime, m):
         if hasattr(mod, 'rope_deltas'):
             mod.rope_deltas = None
 
-def sample_response(runtime, it, ctx):
-    open_q = runtime.random.Random(runtime.seed_of(runtime.key(it)) + ctx['g']).random() < runtime.CFG['p_open']
+def sample_response(runtime, it, ctx, task_prompt_only=False):
+    open_q = False if task_prompt_only else runtime.random.Random(runtime.seed_of(runtime.key(it)) + ctx['g']).random() < runtime.CFG['p_open']
     q = runtime.CFG['open_prompt'] if open_q else None
     fr, fps, _ = runtime.view_frames(it, 'orig')
     inp = runtime.build_inputs(fr, q or it['question'], fps, yn=q is None).to(runtime.DEV)
@@ -88,11 +89,22 @@ def yn_margins(runtime, s, t, open_q):
         return {}
     return dict(m_S=(s[0, runtime.YES] - s[0, runtime.NO]).item(), m_T=(t[0, runtime.YES] - t[0, runtime.NO]).item())
 
+def _teacher_answer_correct(margin, answer):
+    return (margin > 0) == (answer == 'yes')
+
+def _tvdf_rank_reliable(rows, keep_fraction):
+    count = min(len(rows), max(1, int(math.ceil(keep_fraction * len(rows))))) if rows else 0
+    return sorted(rows, key=lambda row: row[0], reverse=True)[:count]
+
 def step_onpolicy(runtime, T, div='jsd'):
     spec = runtime.TEACHERS[T]
 
     def f(it, ctx):
-        q, open_q, resp = runtime.sample_response(it, ctx)
+        cached = runtime._tvdf_rollouts.pop(runtime.key(it), None) if div == 'rkl' else None
+        q, open_q, resp = cached if cached is not None else runtime.sample_response(
+            it, ctx, task_prompt_only=(div == 'rkl')
+        )
+        resp = resp.to(runtime.DEV)
         n = resp.numel()
         if n == 0:
             runtime.model.train()
@@ -124,12 +136,8 @@ def step_opsd(runtime, T):
     return f
 
 def tvdf_select(runtime, T):
-    tau = float(runtime.np.median([
-        abs(runtime.margin(runtime.tlog(runtime.key(i), T)))
-        for i in runtime.TRAIN
-    ]))
-
     def sel(items, ep):
+        runtime._tvdf_rollouts = {}
         if ep == 0:
             return items
         runtime.model.eval()
@@ -137,15 +145,43 @@ def tvdf_select(runtime, T):
         with runtime.torch.no_grad():
             for it in items:
                 t = runtime.tlog(runtime.key(it), T)
-                s = runtime.student_last(it, grad=False)
                 mT = runtime.margin(t)
-                ok = (mT > 0) == (it['answer'] == 'yes') if runtime.CFG['tvdf_use_gt'] else abs(mT) >= tau
-                rows.append((ok, runtime.rkl(t[None], s[None]).item(), it))
-        rel = sorted([r for r in rows if r[0]], key=lambda r: -r[1])
-        keep = [r[2] for r in rel[:int(runtime.CFG['tvdf_keep'] * len(items))]]
-        print(f'  TVDF epoch {ep}: {len(rel)} mẫu đáng tin → giữ {len(keep)}')
-        return keep or items
+                teacher_correct = runtime._teacher_answer_correct(mT, it['answer'])
+                if not teacher_correct:
+                    continue
+
+                key = runtime.key(it)
+                q, open_q, resp = runtime.sample_response(
+                    it, dict(ep=ep, g=runtime.seed_of(key) + ep * 1_000_003),
+                    task_prompt_only=True,
+                )
+                if resp.numel() == 0:
+                    continue
+                seq = runtime.seq_logits(it, runtime.views_of(runtime.TEACHERS[T]), resp, q, adapter_on=False)
+                teacher_seq = runtime.compose_seq(seq, runtime.TEACHERS[T])
+                student_seq = runtime.seq_logits(it, ['orig'], resp, q, adapter_on=True)['orig']
+                disagreement = runtime.rkl(teacher_seq, student_seq).item()
+                rows.append((disagreement, key, q, open_q, resp.detach().cpu(), it))
+
+        selected = runtime._tvdf_rank_reliable(rows, runtime.CFG['tvdf_keep'])
+        runtime._tvdf_rollouts = {
+            key: (q, open_q, resp)
+            for _, key, q, open_q, resp, _ in selected
+        }
+        print(f'  TVDF epoch {ep}: teacher-correct={len(rows)}; kept={len(selected)}')
+        return [row[5] for row in selected]
     return sel
+
+def capture_method_state(runtime):
+    return {
+        'tvdf_rollouts': {
+            key: (q, open_q, resp.detach().cpu())
+            for key, (q, open_q, resp) in getattr(runtime, '_tvdf_rollouts', {}).items()
+        }
+    }
+
+def restore_method_state(runtime, state):
+    runtime._tvdf_rollouts = dict((state or {}).get('tvdf_rollouts', {}))
 
 def seed_beta(runtime, k):
     return runtime.CFG['seed_betas'][int(runtime.np.searchsorted(runtime._qt, runtime._conf[k]))]
@@ -200,12 +236,16 @@ def run(runtime):
     runtime.step_onpolicy = MethodType(step_onpolicy, runtime)
     runtime.step_opsd = MethodType(step_opsd, runtime)
     runtime.tvdf_select = MethodType(tvdf_select, runtime)
+    runtime._teacher_answer_correct = _teacher_answer_correct
+    runtime._tvdf_rank_reliable = _tvdf_rank_reliable
     runtime._conf = {}
     runtime._qt = []
     runtime.seed_beta = MethodType(seed_beta, runtime)
     runtime.seed_logits = MethodType(seed_logits, runtime)
     runtime.step_seed = MethodType(step_seed, runtime)
-    runtime.METHOD_DEF = {'kd_basic': (lambda T: runtime.step_kd_basic(T), None, False), 'kd_perm': (lambda T: runtime.step_kd_basic(T, perm=True), None, False), 'seed': (lambda T: runtime.step_seed(T, True), None, True), 'seed_nolabel': (lambda T: runtime.step_seed(T, False), None, False), 'onpolicy_gkd': (lambda T: runtime.step_onpolicy(T, 'jsd'), None, False), 'video_opd': (lambda T: runtime.step_onpolicy(T, 'rkl'), lambda T: runtime.tvdf_select(T), runtime.CFG['tvdf_use_gt']), 'opsd': (lambda T: runtime.step_opsd(T), None, False)}
+    runtime.capture_method_state = MethodType(capture_method_state, runtime)
+    runtime.restore_method_state = MethodType(restore_method_state, runtime)
+    runtime.METHOD_DEF = {'kd_basic': (lambda T: runtime.step_kd_basic(T), None, False), 'kd_perm': (lambda T: runtime.step_kd_basic(T, perm=True), None, False), 'seed': (lambda T: runtime.step_seed(T, True), None, True), 'seed_nolabel': (lambda T: runtime.step_seed(T, False), None, False), 'onpolicy_gkd': (lambda T: runtime.step_onpolicy(T, 'jsd'), None, False), 'video_opd': (lambda T: runtime.step_onpolicy(T, 'rkl'), lambda T: runtime.tvdf_select(T), False), 'opsd': (lambda T: runtime.step_opsd(T), None, False)}
     runtime.register = MethodType(register, runtime)
     runtime.METHODS = {'sft_gt': (lambda: runtime.step_sft(), None, None, True)}
     for runtime.m in runtime.CFG['methods']:

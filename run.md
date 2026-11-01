@@ -214,27 +214,40 @@ echo "job cuối: $LAST"
 | `TEACHER_FRAMES` | `32` | Số frame của teacher |
 | `PAIR` | unset | Một cặp Both dạng `a_pos:a_neg`, ví dụ `1:0.75`; nhận cả 0 |
 | `PAIRS` | unset | Nhiều cặp Both phân tách bằng `;` |
-| `DISTILL_METHODS` | unset | So sánh loss dạng `kd_basic:video_opd:seed` |
+| `DISTILL_METHODS` | unset | So sánh `kd_basic:video_opd` |
 | `WORK` | `/scratch/hn98/$USER/runs/exp1` | Work-dir |
 | `SEED_CHECKPOINT_EVERY_STEPS` | `5` | Lưu checkpoint train mỗi số bước optimizer |
 | `SEED_EVAL_CHECKPOINT_EVERY` | `25` | Lưu tiến độ đánh giá mỗi số mẫu |
 
 ### So sánh distillation methods
 
-Ba loss dùng chung teacher `T_pos_tcd` và cùng `(a_pos, a_neg)`: `kd_basic` (forward KL), `video_opd`
-(on-policy reverse KL, TVDF selection) và `seed` (SEED). Chạy smoke trước:
+Hai nhánh dùng cùng teacher `T_pos_tcd` và cùng `(a_pos, a_neg)`. `kd_basic` là baseline forward-KL
+trên phân phối yes/no ở prompt. `video_opd` là bản thích nghi Video-OPD cho QA video nhị phân: student
+sinh câu trả lời từ prompt của benchmark; teacher phải dự đoán đúng nhãn để qua reliability gate; trong
+các rollout đó, TVDF giữ nhóm có reverse-KL trung bình theo token cao nhất. Rollout được dùng lại cho
+cập nhật student và được lưu cùng checkpoint để resume nhất quán.
+
+Đây là adaptation theo cơ chế, không phải reproduction cấu hình chính thức: dùng InternVL3.5/Qwen3 hiện
+có, teacher tổng hợp `T_pos_tcd`, dữ liệu VideoHallucer và binary QA. `kd_basic` cũng là đối chứng cùng
+teacher, không phải một phần của Video-OPD. SEED không nằm trong bảng so sánh này vì không có mã nguồn
+tham chiếu để xác nhận implementation. OPSD-V là self-distillation cho mô hình sinh video khuếch tán;
+objective của nó không tương thích trực tiếp với student VLM đang sinh câu trả lời QA, nên không gắn nhãn
+phương pháp hiện tại là OPSD-V.
+
+Chạy smoke trước:
 
 ```bash
 qsub -l walltime=00:30:00 \
-  -v "ARM=adaptive_pos_neg,PAIR=0.9:0.25,DISTILL_METHODS=kd_basic:video_opd:seed,SMOKE_PAIRS=1,WORK=$SMOKE,TEACHER_FRAMES=32" \
+  -v "ARM=adaptive_pos_neg,PAIR=0.9:0.25,DISTILL_METHODS=kd_basic:video_opd,SMOKE_PAIRS=1,WORK=$SMOKE,TEACHER_FRAMES=32" \
   -N seed_distill_smoke \
   -o "$PWD/logs/seed_distill_smoke.out" \
   -e "$PWD/logs/seed_distill_smoke.err" \
   scripts/run_exp1.pbs
 ```
 
-Smoke chỉ chạy một epoch. Full method comparison chạy hai epoch để Video OPD đi qua warm-up rồi áp dụng TVDF;
-các phương pháp còn lại cũng chạy cùng hai epoch để so sánh công bằng. Kết quả nằm dưới
+Smoke và full comparison đều chạy hai epoch: epoch đầu warm-up, epoch sau áp dụng TVDF. Như vậy smoke xác
+minh cả rollout/loss lẫn reliability gate, xếp hạng TVDF và dùng lại rollout; KD cũng chạy hai epoch để so
+sánh công bằng. Kết quả nằm dưới
 `$WORK/cdt_distill_cache_f8_448/distillation_methods/runs/ap0.9_an0.25_tf32/`.
 
 ### Grid Both 2D
