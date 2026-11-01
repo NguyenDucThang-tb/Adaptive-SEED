@@ -47,6 +47,9 @@ def _valid_order_keys(order_keys, item_by_key):
         and all(key in item_by_key for key in order_keys)
     )
 
+def _epoch_log_rows(log, epoch):
+    return [row for row in log if row.get('ep') == epoch]
+
 def _wrap(runtime):
     runtime.model = runtime.get_peft_model(runtime.model, runtime.LoraConfig(r=runtime.CFG['lora_r'], lora_alpha=runtime.CFG['lora_alpha'], lora_dropout=runtime.CFG['lora_dropout'], target_modules=runtime.LORA_TARGETS, bias='none'))
 
@@ -155,22 +158,31 @@ def train_arm(runtime, name, seed):
                     raise RuntimeError(f'Checkpoint train order không khớp dữ liệu: {train_checkpoint_path}')
                 order = [item_by_key[k] for k in order_keys]
                 runtime.model.train()
+                pending_losses = 0
                 for i in range(next_index, len(order)):
                     it = order[i]
                     loss, parts = step(it, dict(ep=epoch, g=g, progress=g / total))
                     g += 1
                     if loss is not None:
                         (loss / runtime.CFG['grad_accum']).backward()
-                        log.append(dict(ep=epoch, loss=loss.item(), **parts))
+                        pending_losses += 1
+                    if loss is not None or parts:
+                        row = dict(ep=epoch, **parts)
+                        if loss is not None:
+                            row['loss'] = loss.item()
+                        log.append(row)
                     if (i + 1) % runtime.CFG['grad_accum'] == 0 or i == len(order) - 1:
-                        runtime.torch.nn.utils.clip_grad_norm_(params, 1.0)
-                        opt.step()
-                        sched.step()
-                        opt.zero_grad(set_to_none=True)
-                        opt_steps += 1
                         next_index = i + 1
+                        did_step = bool(pending_losses)
+                        if pending_losses:
+                            runtime.torch.nn.utils.clip_grad_norm_(params, 1.0)
+                            opt.step()
+                            sched.step()
+                            opt.zero_grad(set_to_none=True)
+                            opt_steps += 1
+                            pending_losses = 0
 
-                        if opt_steps % save_every_steps == 0:
+                        if did_step and opt_steps % save_every_steps == 0:
                             _atomic_torch_save(runtime, dict(
                                 cfg=cfg,
                                 adapter={k: v.detach().cpu() for k, v in runtime.get_peft_model_state_dict(runtime.model).items()},
@@ -187,8 +199,8 @@ def train_arm(runtime, name, seed):
                                 method_state=runtime.capture_method_state() if hasattr(runtime, 'capture_method_state') else None,
                             ), train_checkpoint_path)
 
-                d = runtime.pd.DataFrame(log)
-                d = d[d.ep == epoch].drop(columns='ep').mean().round(5).to_dict()
+                epoch_rows = _epoch_log_rows(log, epoch)
+                d = runtime.pd.DataFrame(epoch_rows).drop(columns='ep').mean().round(5).to_dict() if epoch_rows else {}
                 print(f'[{tag}] epoch {epoch}: {d} ({train_min + (runtime.time.time() - started) / 60:.1f} phút)')
                 epoch += 1
                 next_index, order_keys = 0, None

@@ -3,10 +3,32 @@ from types import SimpleNamespace
 
 from seed_video.experiments.distillation import method_registry
 from seed_video.teachers.composition import coefs
-from seed_video.training.losses import _teacher_answer_correct, _tvdf_rank_reliable
+from seed_video.training.losses import (
+    _teacher_answer_correct,
+    _tvdf_rank_reliable,
+    response_tokens,
+)
 
 
 class DistillationMethodTests(unittest.TestCase):
+    def test_response_tokens_handles_full_sequence_and_continuation_only(self):
+        class Tensor:
+            def __init__(self, values):
+                self.values = values
+                self.shape = (len(values),)
+
+            def __getitem__(self, item):
+                return Tensor(self.values[item]) if isinstance(item, slice) else self.values[item]
+
+        class Torch:
+            @staticmethod
+            def equal(left, right):
+                return left.values == right.values
+
+        prompt = Tensor([10, 11])
+        self.assertEqual(response_tokens([Tensor([10, 11, 12])], [prompt], Torch).values, [12])
+        self.assertEqual(response_tokens([Tensor([12, 13])], [prompt], Torch).values, [12, 13])
+
     def test_registry_exposes_kd_and_video_opd_adaptation(self):
         runtime = SimpleNamespace(
             step_kd_basic=lambda teacher: f"kd:{teacher}",

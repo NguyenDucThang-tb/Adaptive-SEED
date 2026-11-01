@@ -21,6 +21,15 @@ def student_last(runtime, it, grad=True):
 def gt_tok(runtime, it):
     return runtime.YES if it['answer'] == 'yes' else runtime.NO
 
+def response_tokens(generated, input_ids, torch):
+    sequences = generated.sequences if hasattr(generated, 'sequences') else generated
+    sequence = sequences[0]
+    prompt = input_ids[0]
+    prompt_len = prompt.shape[0]
+    if sequence.shape[0] >= prompt_len and torch.equal(sequence[:prompt_len], prompt):
+        return sequence[prompt_len:]
+    return sequence
+
 def step_kd_basic(runtime, T, perm=False):
 
     def f(it, ctx):
@@ -62,7 +71,7 @@ def sample_response(runtime, it, ctx, task_prompt_only=False):
         else:
             gen = runtime.model.generate(**inp, **generation_kwargs)
     runtime._reset_rope(runtime.model)
-    return (q, open_q, gen[0, inp['input_ids'].shape[1]:])
+    return (q, open_q, runtime.response_tokens(gen, inp['input_ids'], runtime.torch))
 
 def views_of(runtime, spec):
     return ['orig'] + ([spec['pos']] if spec['pos'] else []) + list(spec['negs'])
@@ -108,7 +117,7 @@ def step_onpolicy(runtime, T, div='jsd'):
         n = resp.numel()
         if n == 0:
             runtime.model.train()
-            return (None, {})
+            return (None, dict(empty_response=1))
         t = runtime.compose_seq(runtime.seq_logits(it, runtime.views_of(spec), resp, q, adapter_on=False), spec)
         runtime.model.train()
         s = runtime.fwd_view(it, 'orig', grad=True, resp=resp, question=q)[0].logits[0, -n - 1:-1]
@@ -225,6 +234,7 @@ def run(runtime):
     runtime.jsd = MethodType(jsd, runtime)
     runtime.student_last = MethodType(student_last, runtime)
     runtime.gt_tok = MethodType(gt_tok, runtime)
+    runtime.response_tokens = response_tokens
     runtime.step_kd_basic = MethodType(step_kd_basic, runtime)
     runtime.step_sft = MethodType(step_sft, runtime)
     runtime._reset_rope = MethodType(_reset_rope, runtime)

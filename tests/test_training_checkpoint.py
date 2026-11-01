@@ -8,6 +8,7 @@ from unittest.mock import patch
 from seed_video.training.trainer import (
     _atomic_torch_save,
     _checkpoint_interval,
+    _epoch_log_rows,
     _valid_order_keys,
 )
 
@@ -25,6 +26,11 @@ class TrainingCheckpointTests(unittest.TestCase):
 
     def test_training_order_accepts_empty_filtered_subset(self):
         self.assertTrue(_valid_order_keys([], {"a": object()}))
+
+    def test_empty_or_filtered_epoch_has_empty_log_summary_rows(self):
+        log = [{'ep': 0, 'loss': 0.3}, {'ep': 1, 'empty_response': 1}]
+        self.assertEqual(_epoch_log_rows(log, 2), [])
+        self.assertEqual(_epoch_log_rows(log, 1), [{'ep': 1, 'empty_response': 1}])
 
     def test_training_order_rejects_unknown_or_duplicate_keys(self):
         items = {"a": object(), "b": object()}
