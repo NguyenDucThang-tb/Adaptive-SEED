@@ -7,9 +7,15 @@ from seed_video.models.internvl import (
     get_feature_grid,
     model_spec as internvl_model_spec,
 )
+from seed_video.models.foreground import temporal_grid_indices
 
 
 class InternVLModelSpecTests(unittest.TestCase):
+    def test_foreground_temporal_grid_resamples_teacher_to_student_frames(self):
+        self.assertEqual(temporal_grid_indices(32, 8), [0, 4, 9, 13, 18, 22, 27, 31])
+        self.assertEqual(temporal_grid_indices(16, 4), [0, 5, 10, 15])
+        self.assertEqual(temporal_grid_indices(8, 1), [0])
+
     def test_generation_drops_image_flags_but_preserves_forward_inputs(self):
         class Model:
             def generate(self, **kwargs):

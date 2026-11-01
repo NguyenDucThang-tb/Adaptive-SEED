@@ -23,8 +23,18 @@ def fg_soft_grid(runtime, preds, grid, kernel, avg_weight):
         out.append((avg_weight * g_avg + (1 - avg_weight) * g_max).clamp(0, 1))
     return runtime.torch.stack(out)
 
+def temporal_grid_indices(source_frames, target_frames):
+    if source_frames < 1 or target_frames < 1:
+        raise ValueError('temporal grid sizes must be positive')
+    if target_frames == 1:
+        return [0]
+    return [round(i * (source_frames - 1) / (target_frames - 1)) for i in range(target_frames)]
+
 def fg_tokens(runtime, video, T, hm, wm):
     g = runtime.FG_SOFT[video].float()
+    if g.shape[0] != T:
+        indices = runtime.torch.tensor(temporal_grid_indices(g.shape[0], T), dtype=runtime.torch.long, device=g.device)
+        g = g.index_select(0, indices)
     assert tuple(g.shape) == (T, hm, wm), f'lưới fg {tuple(g.shape)} ≠ lưới token {(T, hm, wm)}'
     return g if runtime.CFG['fg_soft'] else (g > runtime.CFG['fg_thr']).float()
 
@@ -43,6 +53,7 @@ def run(runtime):
     runtime.os.makedirs(f'{runtime.CACHE}/fg_{runtime.MASK_TAG}', exist_ok=True)
     runtime.mask_path = MethodType(mask_path, runtime)
     runtime.fg_soft_grid = MethodType(fg_soft_grid, runtime)
+    runtime.temporal_grid_indices = temporal_grid_indices
     runtime.todo_m = [v for v in runtime.ALL_VIDEOS if not runtime.os.path.exists(runtime.mask_path(v))]
     if runtime.todo_m:
         runtime.birefnet = runtime.AutoModelForImageSegmentation.from_pretrained(runtime.CFG['birefnet_id'], trust_remote_code=True).to(runtime.DEV).eval().half()
