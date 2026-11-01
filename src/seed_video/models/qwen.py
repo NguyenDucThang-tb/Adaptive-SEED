@@ -140,6 +140,7 @@ def run(runtime):
     runtime.build_inputs = MethodType(build_inputs, runtime)
     runtime.with_response = MethodType(with_response, runtime)
     runtime.fwd_view = MethodType(fwd_view, runtime)
+    runtime.get_feature_grid = lambda inp: tuple(inp['video_grid_thw'][0].tolist())
     runtime.adapter_off = MethodType(adapter_off, runtime)
     runtime.margin = MethodType(margin, runtime)
     runtime.it0 = runtime.TEST[0]

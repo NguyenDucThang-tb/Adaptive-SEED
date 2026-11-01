@@ -39,7 +39,7 @@ def extra_logits(runtime, it, selected=False, reverse=False, probe=None):
     if reverse:
         fr = list(reversed(fr))
     inp = runtime.build_inputs(fr, probe or it['question'], fps, yn=True).to(runtime.DEV)
-    T, gh, gw = inp['video_grid_thw'][0].tolist()
+    T, gh, gw = runtime.get_feature_grid(inp)
     fg = runtime.fg_tokens(it['video'], T, gh // 2, gw // 2)
     if reverse:
         fg = fg.flip(0)

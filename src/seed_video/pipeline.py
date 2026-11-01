@@ -36,7 +36,10 @@ def run(args):
     runtime = Runtime(args)
     for name in plan(args.stage):
         print(f"[stage] {name}", flush=True)
-        import_module(f"seed_video.{name}").run(runtime)
+        module_name = f"seed_video.{name}"
+        if name == "models.qwen" and runtime.CFG.get("model_id", "").startswith("OpenGVLab/"):
+            module_name = "seed_video.models.internvl"
+        import_module(module_name).run(runtime)
         if name == "provenance":
             runtime.SOURCE_HASH = source_hash()
     return runtime
