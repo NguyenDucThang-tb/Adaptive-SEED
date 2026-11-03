@@ -58,7 +58,7 @@ run_point() {
     echo "===== BASE ONLY | a_pos=$AP a_neg=$AN | $(date) ====="
     python -m seed_video --stage core --work-dir "$WORK" \
       --a-pos "$AP" --a-neg "$AN" --teacher-frames "$TEACHER_FRAMES" \
-      --base-only
+      --base-only "${SMOKE_ARGS[@]}"
     return
   fi
   if [[ -n "${DISTILL_METHODS:-}" ]]; then
