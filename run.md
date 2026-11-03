@@ -251,6 +251,75 @@ minh cả rollout/loss lẫn reliability gate, xếp hạng TVDF và dùng lại
 sánh công bằng. Kết quả nằm dưới
 `$WORK/cdt_distill_cache_f8_448/distillation_methods/runs/ap0.9_an0.25_tf32/`.
 
+### Bốn job độc lập: Base, KD, GKD, Video-OPD
+
+`--base-only` chỉ đánh giá model gốc, có checkpoint theo lô và ghi `run=base` vào cùng định dạng
+`distillation_methods/.../results.csv`. `scripts/run_exp1.pbs` nhận `BASE_ONLY=1` cho job này. Mỗi job
+distillation cần đúng một giá trị trong `DISTILL_METHODS`; job đó cũng ghi hàng Base để đối chiếu, nhưng
+chỉ train method được chỉ định. Không dùng chung `WORK` giữa các job chạy đồng thời.
+
+```bash
+cd /scratch/hn98/$USER/Adaptive-SEED
+ROOT=/scratch/jp09/$USER/runs/exp1_qwen3_distill_full
+LOG_DIR=/scratch/jp09/$USER/logs
+VH_SRC=/scratch/jp09/$USER/runs/exp1_qwen3/VideoHallucer
+EH_VID=/scratch/hn98/$USER/downloads/eh/extracted/videos
+EH_Q_SRC=/scratch/jp09/$USER/video-hallucination-benchmark/external/EventHallusion/questions
+PYENV=/scratch/jp09/$USER/venv_qwen3
+HF_HOME=/scratch/jp09/$USER/hf_cache_qwen3
+test -d "$VH_SRC" || { echo "Thiếu VideoHallucer: $VH_SRC"; exit 1; }
+for split in entire interleave misleading; do
+  test -d "$EH_VID/$split" || { echo "Thiếu video split: $EH_VID/$split"; exit 1; }
+done
+for split in entire mix misleading; do
+  test -f "$EH_Q_SRC/${split}_questions.json" || { echo "Thiếu question JSON: $split"; exit 1; }
+done
+test ! -e "$ROOT" || { echo "ROOT đã tồn tại; kiểm tra trước: $ROOT"; exit 1; }
+mkdir -p "$ROOT" "$LOG_DIR"
+
+for KIND in base kd_basic onpolicy_gkd video_opd; do
+  WORK="$ROOT/$KIND"
+  mkdir -p "$WORK"
+  ln -s "$VH_SRC" "$WORK/VideoHallucer"
+  mkdir -p "$WORK/EventHallusion/questions"
+  cp -rs "$EH_VID/." "$WORK/EventHallusion/"
+  cp -rs "$EH_Q_SRC/"*.json "$WORK/EventHallusion/questions/"
+done
+
+for KIND in base kd_basic onpolicy_gkd video_opd; do
+  WORK="$ROOT/$KIND"
+  for pair in "entire 109" "interleave 193" "misleading 95"; do
+    read -r split expected <<< "$pair"
+    actual=$(find "$WORK/EventHallusion/$split" -maxdepth 1 -type f | wc -l)
+    [[ "$actual" -eq "$expected" ]] || { echo "$KIND: $split=$actual, expected $expected"; exit 1; }
+  done
+  test -f "$WORK/EventHallusion/questions/entire_questions.json" \
+    && test -f "$WORK/EventHallusion/questions/mix_questions.json" \
+    && test -f "$WORK/EventHallusion/questions/misleading_questions.json" \
+    || { echo "$KIND: thiếu question JSON"; exit 1; }
+done
+
+for KIND in base kd_basic onpolicy_gkd video_opd; do
+  WORK="$ROOT/$KIND"
+  COMMON="PYTHON_ENV=$PYENV,HF_HOME=$HF_HOME,HF_HUB_CACHE=$HF_HOME/hub,SEED_MODEL_ID=Qwen/Qwen3-VL-8B-Instruct,WORK=$WORK,TEACHER_FRAMES=32,A_POS=0.9,A_NEG=0.25"
+  if [[ "$KIND" == base ]]; then
+    VARS="BASE_ONLY=1,$COMMON"
+  else
+    VARS="ARM=adaptive_pos_neg,PAIR=0.9:0.25,DISTILL_METHODS=$KIND,$COMMON"
+  fi
+
+  JOB_ID=$(qsub -l walltime=02:00:00 -v "$VARS" \
+    -N "q3_${KIND}" -o "$LOG_DIR/q3_${KIND}.out" \
+    -e "$LOG_DIR/q3_${KIND}.err" scripts/run_exp1.pbs) || exit 1
+  echo "$KIND -> $JOB_ID"
+done
+```
+
+Đây là bốn job có thể được scheduler xếp chạy song song. Mỗi `WORK` giữ cache/checkpoint riêng; các job
+method ghi lại Base trong kết quả riêng của mình, còn job `base` là Base-only độc lập. Gộp các hàng `base`
+và hàng method cần báo cáo sau khi cả bốn job xong. Xác nhận ba thư mục EventHallusion có lần lượt 109,
+193, 95 video và đủ ba JSON câu hỏi trước khi submit.
+
 ### Grid Both 2D
 
 Mỗi cặp là một cấu hình riêng; `a_pos=0` tắt nhánh positive, `a_neg=0` tắt nhánh TCD-negative, `(0,0)` là

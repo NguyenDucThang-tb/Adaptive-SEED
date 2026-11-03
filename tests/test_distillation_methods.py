@@ -1,7 +1,16 @@
 import unittest
+import os
+import tempfile
 from types import SimpleNamespace
+from pathlib import Path
 
-from seed_video.experiments.distillation import method_registry
+import numpy as np
+import pandas as pd
+import torch
+from unittest.mock import patch
+
+from seed_video.cli import main
+from seed_video.experiments.distillation import method_registry, run_base_only
 from seed_video.teachers.composition import coefs
 from seed_video.training.losses import (
     _teacher_answer_correct,
@@ -11,6 +20,49 @@ from seed_video.training.losses import (
 
 
 class DistillationMethodTests(unittest.TestCase):
+    def test_base_only_cli_mode_passes_flag_to_pipeline(self):
+        with patch("seed_video.cli.run") as run_pipeline:
+            main(["--base-only"])
+
+        self.assertTrue(run_pipeline.call_args.args[0].base_only)
+
+    def test_base_only_saves_resumable_original_model_metrics(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            items = [
+                {"pair_id": "p0", "role": "basic", "video": "v0", "question": "q0", "answer": "yes"},
+                {"pair_id": "p0", "role": "hallucination", "video": "v1", "question": "q1", "answer": "no"},
+            ]
+            runtime = SimpleNamespace(
+                CFG={"a_pos": 0.9, "a_tcd": 0.25, "teacher_frames": 32,
+                     "model_id": "Qwen/Qwen3-VL-8B-Instruct", "n_frames": 8, "frame_size": 448},
+                CACHE=str(Path(tmp) / "cache"),
+                SOURCE_HASH="test-source",
+                Path=Path,
+                os=os,
+                torch=torch,
+                np=np,
+                pd=pd,
+                VAL=items,
+                TEST=items,
+                EH=[],
+                eval_set=lambda: items,
+                key=lambda item: f"{item['pair_id']}|{item['role']}",
+                eval_items=lambda batch: {
+                    f"{item['pair_id']}|{item['role']}": 1.0 if item["answer"] == "yes" else -1.0
+                    for item in batch
+                },
+                cfg_hash=lambda meta: "stable",
+                pair_acc=lambda marg, selected: 1.0,
+                display=lambda _: None,
+            )
+
+            run_base_only(runtime)
+            rows = pd.read_csv(runtime.RES / "results.csv")
+
+            self.assertEqual(rows["run"].tolist(), ["base", "base"])
+            self.assertEqual(rows["q_acc"].tolist(), [1.0, 1.0])
+            self.assertEqual(rows["pair_acc"].tolist(), [1.0, 1.0])
+
     def test_response_tokens_handles_full_sequence_and_continuation_only(self):
         class Tensor:
             def __init__(self, values):

@@ -40,6 +40,53 @@ def _save_results(runtime):
     runtime.os.replace(temp, path)
 
 
+def run_base_only(runtime):
+    """Evaluate the original model and save the same base row used by comparisons."""
+    tag = f"ap{runtime.CFG['a_pos']:g}_an{runtime.CFG['a_tcd']:g}_tf{runtime.CFG['teacher_frames']}"
+    runtime.OUT = runtime.Path(runtime.CACHE) / "distillation_methods"
+    runtime.RES = runtime.OUT / "runs" / tag
+    runtime.RES.mkdir(parents=True, exist_ok=True)
+    runtime.SPLITS = {"VH_VAL": runtime.VAL, "VH_TEST": runtime.TEST, "EH_ALL": runtime.EH}
+    for subset in sorted({item["subset"] for item in runtime.EH}):
+        runtime.SPLITS[subset] = [item for item in runtime.EH if item["subset"] == subset]
+    runtime.result_rows = MethodType(result_rows, runtime)
+    runtime.save_distillation_results = MethodType(_save_results, runtime)
+
+    items = runtime.eval_set()
+    meta = {
+        "source": runtime.SOURCE_HASH,
+        "model": runtime.CFG["model_id"],
+        "n_frames": runtime.CFG["n_frames"],
+        "frame_size": runtime.CFG["frame_size"],
+        "items": [
+            [runtime.key(item), item["video"], item["question"], item["answer"]]
+            for item in items
+        ],
+    }
+    path = runtime.RES / f"base_only_{runtime.cfg_hash(meta)}.pt"
+    state = None
+    if path.exists():
+        state = runtime.torch.load(path, map_location="cpu", weights_only=False)
+        if state.get("meta") != meta:
+            raise RuntimeError(f"Base evaluation cache does not match this run: {path}")
+    marg = dict(state.get("marg", {})) if state else {}
+    pending = [item for item in items if runtime.key(item) not in marg]
+    interval = int(runtime.os.environ.get("SEED_EVAL_CHECKPOINT_EVERY", "25"))
+    if interval < 1:
+        raise ValueError("SEED_EVAL_CHECKPOINT_EVERY must be >= 1")
+    for start in range(0, len(pending), interval):
+        marg.update(runtime.eval_items(pending[start : start + interval]))
+        temp = path.with_name(f"{path.name}.tmp.{runtime.os.getpid()}")
+        runtime.torch.save({"meta": meta, "marg": marg}, temp)
+        runtime.os.replace(temp, path)
+
+    runtime.MARG = {"base": marg}
+    runtime.ROWS = runtime.result_rows("base", marg)
+    runtime.save_distillation_results()
+    runtime.display(runtime.pd.DataFrame(runtime.ROWS))
+    print("Saved Base-only results:", runtime.RES / "results.csv")
+
+
 def run(runtime, methods):
     unknown = sorted(set(methods) - set(METHODS))
     if unknown:

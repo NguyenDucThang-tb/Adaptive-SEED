@@ -136,6 +136,10 @@ def run(runtime):
     runtime.copy = copy
     runtime.ABL = dict(version='seed_components_v1', top_fraction=0.25, gain_tau=1.0, pair_mode='direction_proxy', seeds=[0])
     runtime.ARMS = {'seed_base': (0, 0, 0, 0), 'token_only': (1, 0, 0, 0), 'pair_only': (0, 1, 0, 0), 'adaptive_pos_only': (0, 0, 1, 0), 'adaptive_neg_only': (0, 0, 0, 1), 'token_pair': (1, 1, 0, 0), 'adaptive_pos_neg': (0, 0, 1, 1), 'all_components': (1, 1, 1, 1)}
+    if getattr(runtime.args, 'base_only', False):
+        from seed_video.experiments.distillation import run_base_only
+        run_base_only(runtime)
+        return
     assert 'T_pos_tcd' in runtime.TEACHERS
     assert runtime.TEACHERS['T_pos_tcd']['pos'] == 'orig+fg'
     assert set(runtime.TEACHERS['T_pos_tcd']['negs']) == {'tcd'}

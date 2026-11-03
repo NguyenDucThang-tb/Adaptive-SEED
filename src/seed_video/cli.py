@@ -14,12 +14,18 @@ def main(argv=None):
     parser.add_argument("--no-eh", action="store_true")
     parser.add_argument("--a-pos", type=float, default=None, help="Max positive coefficient a_p in [0, 1]; default 0.9")
     parser.add_argument("--a-neg", type=float, default=None, help="Max negative (TCD) coefficient a_n in [0, 1]; default 0.25")
-    parser.add_argument(
+    run_mode = parser.add_mutually_exclusive_group()
+    run_mode.add_argument(
         "--distill-methods",
         nargs="+",
         choices=["kd_basic", "onpolicy_gkd", "video_opd"],
         default=None,
         help="Compare these distillation losses in the components experiment.",
+    )
+    run_mode.add_argument(
+        "--base-only",
+        action="store_true",
+        help="Evaluate the original model only; do not train an adapter or run ablation arms.",
     )
     parser.add_argument("--teacher-frames", type=int, default=None,
                         help="Frames decoded for teacher branches (orig, orig+fg, tcd, seednoise); default = student n_frames (8)")

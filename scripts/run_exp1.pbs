@@ -18,7 +18,10 @@
 #PBS -j oe
 
 set -euo pipefail
-: "${ARM:?Truyền ARM bằng qsub -v ARM=adaptive_pos_only|adaptive_neg_only|adaptive_pos_neg}"
+BASE_ONLY="${BASE_ONLY:-0}"
+if [[ "$BASE_ONLY" != "1" ]]; then
+  : "${ARM:?Truyền ARM bằng qsub -v ARM=adaptive_pos_only|adaptive_neg_only|adaptive_pos_neg}"
+fi
 
 VALUES="${VALUES:-0.25 0.5 0.75 0.9 1}"
 FIXED_AP="${FIXED_AP:-0.9}"     # a_pos mặc định khi chỉ quét a_neg
@@ -51,6 +54,13 @@ export PYTHONPATH="$PWD/src"
 run_point() {
   local AP="$1" AN="$2"
   TAG="ap$(printf '%g' "$AP")_an$(printf '%g' "$AN")_tf${TEACHER_FRAMES}"
+  if [[ "$BASE_ONLY" == "1" ]]; then
+    echo "===== BASE ONLY | a_pos=$AP a_neg=$AN | $(date) ====="
+    python -m seed_video --stage core --work-dir "$WORK" \
+      --a-pos "$AP" --a-neg "$AN" --teacher-frames "$TEACHER_FRAMES" \
+      --base-only
+    return
+  fi
   if [[ -n "${DISTILL_METHODS:-}" ]]; then
     RESULTS="$WORK/cdt_distill_cache_f8_448/distillation_methods/runs/$TAG/results.csv"
     local missing=0 method
@@ -72,12 +82,21 @@ run_point() {
   fi
   echo "===== $ARM | a_pos=$AP a_neg=$AN | $(date) ====="
   # seed_base cùng (a_pos, a_neg) là Base_fix để so sánh công bằng.
-  python -m seed_video --stage core --work-dir "$WORK" \
+  if [[ -n "${DISTILL_METHODS:-}" ]]; then
+    [[ ${#DISTILL_LIST[@]} -eq 1 ]] || { echo "Một job distillation cần đúng một method"; exit 2; }
+    python -m seed_video --stage core --work-dir "$WORK" \
+      --a-pos "$AP" --a-neg "$AN" --teacher-frames "$TEACHER_FRAMES" \
+      --arms seed_base "${DISTILL_ARGS[@]}" "${SMOKE_ARGS[@]}"
+  else
+    python -m seed_video --stage core --work-dir "$WORK" \
       --a-pos "$AP" --a-neg "$AN" --teacher-frames "$TEACHER_FRAMES" --arms seed_base "$ARM" \
-      "${DISTILL_ARGS[@]}" "${SMOKE_ARGS[@]}"
+      "${SMOKE_ARGS[@]}"
+  fi
 }
 
-if [[ "$ARM" == adaptive_pos_neg && -n "${PAIR:-}" ]]; then
+if [[ "$BASE_ONLY" == "1" ]]; then
+  run_point "${A_POS:-0.9}" "${A_NEG:-0.25}"
+elif [[ "$ARM" == adaptive_pos_neg && -n "${PAIR:-}" ]]; then
   IFS=: read -r AP AN <<< "$PAIR"
   [[ -n "$AP" && -n "$AN" ]] || { echo "PAIR phải có dạng a_pos:a_neg"; exit 2; }
   run_point "$AP" "$AN"
