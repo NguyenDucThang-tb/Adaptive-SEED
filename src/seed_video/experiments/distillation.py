@@ -4,7 +4,7 @@ from types import MethodType
 from seed_video.evaluation.reporting import result_rows
 
 
-METHODS = ("kd_basic", "video_opd")
+METHODS = ("kd_basic", "onpolicy_gkd", "video_opd")
 TEACHER = "T_pos_tcd"
 
 
@@ -13,6 +13,9 @@ def method_registry(runtime, methods, teacher=TEACHER):
     for method in methods:
         if method == "kd_basic":
             step = lambda T=teacher: runtime.step_kd_basic(T)
+            selector = None
+        elif method == "onpolicy_gkd":
+            step = lambda T=teacher: runtime.step_onpolicy(T, "jsd")
             selector = None
         elif method == "video_opd":
             step = lambda T=teacher: runtime.step_onpolicy(T, "rkl")

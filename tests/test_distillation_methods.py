@@ -29,15 +29,18 @@ class DistillationMethodTests(unittest.TestCase):
         self.assertEqual(response_tokens([Tensor([10, 11, 12])], [prompt], Torch).values, [12])
         self.assertEqual(response_tokens([Tensor([12, 13])], [prompt], Torch).values, [12, 13])
 
-    def test_registry_exposes_kd_and_video_opd_adaptation(self):
+    def test_registry_exposes_kd_gkd_and_video_opd_adaptations(self):
         runtime = SimpleNamespace(
             step_kd_basic=lambda teacher: f"kd:{teacher}",
             step_onpolicy=lambda teacher, divergence: f"opd:{teacher}:{divergence}",
             tvdf_select=lambda teacher: f"tvdf:{teacher}",
         )
-        registry = method_registry(runtime, ["kd_basic", "video_opd"])
+        registry = method_registry(runtime, ["kd_basic", "onpolicy_gkd", "video_opd"])
 
         self.assertEqual(registry["kd_basic@T_pos_tcd"][0](), "kd:T_pos_tcd")
+        self.assertEqual(registry["onpolicy_gkd@T_pos_tcd"][0](), "opd:T_pos_tcd:jsd")
+        self.assertIsNone(registry["onpolicy_gkd@T_pos_tcd"][2])
+        self.assertFalse(registry["onpolicy_gkd@T_pos_tcd"][3])
         self.assertEqual(registry["video_opd@T_pos_tcd"][0](), "opd:T_pos_tcd:rkl")
         self.assertEqual(registry["video_opd@T_pos_tcd"][2](), "tvdf:T_pos_tcd")
         self.assertFalse(registry["video_opd@T_pos_tcd"][3])

@@ -214,15 +214,16 @@ echo "job cuối: $LAST"
 | `TEACHER_FRAMES` | `32` | Số frame của teacher |
 | `PAIR` | unset | Một cặp Both dạng `a_pos:a_neg`, ví dụ `1:0.75`; nhận cả 0 |
 | `PAIRS` | unset | Nhiều cặp Both phân tách bằng `;` |
-| `DISTILL_METHODS` | unset | So sánh `kd_basic:video_opd` |
+| `DISTILL_METHODS` | unset | So sánh `kd_basic:onpolicy_gkd:video_opd` |
 | `WORK` | `/scratch/hn98/$USER/runs/exp1` | Work-dir |
 | `SEED_CHECKPOINT_EVERY_STEPS` | `5` | Lưu checkpoint train mỗi số bước optimizer |
 | `SEED_EVAL_CHECKPOINT_EVERY` | `25` | Lưu tiến độ đánh giá mỗi số mẫu |
 
 ### So sánh distillation methods
 
-Hai nhánh dùng cùng teacher `T_pos_tcd` và cùng `(a_pos, a_neg)`. `kd_basic` là baseline forward-KL
-trên phân phối yes/no ở prompt. `video_opd` là bản thích nghi Video-OPD cho QA video nhị phân: student
+Các nhánh dùng cùng teacher `T_pos_tcd` và cùng `(a_pos, a_neg)`. `kd_basic` là baseline forward-KL
+trên phân phối yes/no ở prompt. `onpolicy_gkd` dùng rollout câu trả lời của student và JSD giữa student
+với teacher. `video_opd` là bản thích nghi Video-OPD cho QA video nhị phân: student
 sinh câu trả lời từ prompt của benchmark; teacher phải dự đoán đúng nhãn để qua reliability gate; trong
 các rollout đó, TVDF giữ nhóm có reverse-KL trung bình theo token cao nhất. Rollout được dùng lại cho
 cập nhật student và được lưu cùng checkpoint để resume nhất quán.
