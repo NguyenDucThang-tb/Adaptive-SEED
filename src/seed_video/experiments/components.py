@@ -126,6 +126,14 @@ def student_cfg(runtime, name, seed):
     d.update(source=runtime.SOURCE_HASH, abl=runtime.ABL, flags=runtime.ARMS[name], teacher=runtime.BASE_TEACHER, train_content=[runtime.item_sig(i) for i in runtime.TRAIN], eval_content=[runtime.item_sig(i) for i in runtime.eval_set()], confidence_cuts=runtime._qt.tolist(), target_digest=runtime.hashlib.sha256(b''.join((runtime.TARGETS_ABL[name][runtime.key(i)].numpy().tobytes() for i in runtime.TRAIN))).hexdigest())
     return d
 
+def dispatch_distillation(runtime):
+    methods = getattr(runtime.args, 'distill_methods', None)
+    if not methods:
+        return False
+    from seed_video.experiments.distillation import run as run_distillation
+    run_distillation(runtime, methods)
+    return True
+
 def run(runtime):
     """Append after SEED v5 definitions. Teacher cache built once; labels TRAIN only."""
     from pathlib import Path
@@ -171,6 +179,8 @@ def run(runtime):
     runtime.SHARED = runtime.prepare_shared()
     runtime.coverage = sum((r['pair_eligible'] for r in runtime.SHARED.values()))
     print('Pair gate eligible:', runtime.coverage, '/', len(runtime.TRAIN), 'mode:', runtime.ABL['pair_mode'])
+    if dispatch_distillation(runtime):
+        return
     pair_arms = [name for name in runtime.ARM_RUN if runtime.ARMS[name][1]]
     if pair_arms and not runtime.coverage:
         raise ValueError(
@@ -179,10 +189,6 @@ def run(runtime):
         )
     runtime._conf = {k: runtime.torch.log_softmax(r['orig'], 0).max().item() for k, r in runtime.SHARED.items()}
     runtime._qt = runtime.np.quantile(list(runtime._conf.values()), runtime.np.linspace(0, 1, runtime.CFG['seed_groups'] + 1)[1:-1])
-    if getattr(runtime.args, 'distill_methods', None):
-        from seed_video.experiments.distillation import run as run_distillation
-        run_distillation(runtime, runtime.args.distill_methods)
-        return
     runtime.TARGETS_ABL = {}
     runtime.AUDIT = []
     for runtime.name, runtime.flags in runtime.ARMS.items():

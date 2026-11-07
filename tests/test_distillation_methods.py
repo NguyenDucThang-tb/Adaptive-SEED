@@ -10,6 +10,7 @@ import torch
 from unittest.mock import patch
 
 from seed_video.cli import main
+from seed_video.experiments.components import dispatch_distillation
 from seed_video.experiments.distillation import method_registry, run_base_only
 from seed_video.teachers.composition import coefs
 from seed_video.training.losses import (
@@ -20,6 +21,17 @@ from seed_video.training.losses import (
 
 
 class DistillationMethodTests(unittest.TestCase):
+    def test_distillation_dispatch_is_independent_of_pair_gate_validation(self):
+        runtime = SimpleNamespace(args=SimpleNamespace(distill_methods=["kd_basic"]))
+        with patch("seed_video.experiments.distillation.run") as run_distillation:
+            self.assertTrue(dispatch_distillation(runtime))
+
+        run_distillation.assert_called_once_with(runtime, ["kd_basic"])
+
+    def test_dispatch_returns_false_for_component_experiments(self):
+        runtime = SimpleNamespace(args=SimpleNamespace(distill_methods=None))
+        self.assertFalse(dispatch_distillation(runtime))
+
     def test_base_only_cli_mode_passes_flag_to_pipeline(self):
         with patch("seed_video.cli.run") as run_pipeline:
             main(["--base-only"])
