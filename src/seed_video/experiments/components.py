@@ -171,7 +171,12 @@ def run(runtime):
     runtime.SHARED = runtime.prepare_shared()
     runtime.coverage = sum((r['pair_eligible'] for r in runtime.SHARED.values()))
     print('Pair gate eligible:', runtime.coverage, '/', len(runtime.TRAIN), 'mode:', runtime.ABL['pair_mode'])
-    assert runtime.coverage, 'No eligible pair samples. Add verified pi metadata or use direction_proxy.'
+    pair_arms = [name for name in runtime.ARM_RUN if runtime.ARMS[name][1]]
+    if pair_arms and not runtime.coverage:
+        raise ValueError(
+            'Selected arms require pair-gate examples, but this training split has none: '
+            + ', '.join(pair_arms)
+        )
     runtime._conf = {k: runtime.torch.log_softmax(r['orig'], 0).max().item() for k, r in runtime.SHARED.items()}
     runtime._qt = runtime.np.quantile(list(runtime._conf.values()), runtime.np.linspace(0, 1, runtime.CFG['seed_groups'] + 1)[1:-1])
     if getattr(runtime.args, 'distill_methods', None):
@@ -226,9 +231,7 @@ def run(runtime):
     else:
         runtime.MARG['base'] = runtime.eval_items(runtime.eval_set())
         runtime.torch.save(runtime.MARG['base'], runtime.base_path)
-    runtime.SPLITS = {'VH_VAL': runtime.VAL, 'VH_TEST': runtime.TEST, 'EH_ALL': runtime.EH}
-    for runtime.sub in sorted({i['subset'] for i in runtime.EH}):
-        runtime.SPLITS[runtime.sub] = [i for i in runtime.EH if i['subset'] == runtime.sub]
+    runtime.SPLITS = runtime.configure_eval_splits()
     runtime.result_rows = MethodType(result_rows, runtime)
     runtime.save_results = MethodType(save_results, runtime)
     runtime.ROWS = runtime.result_rows('base', runtime.MARG['base'])

@@ -1,4 +1,4 @@
-"""Gộp kết quả Thực nghiệm 1a thành bảng: Arm | VH pair acc | VH Q acc | EventHallusion."""
+"""Gộp answer-gain results for VideoHallucer- or EventHallusion-trained runs."""
 import argparse
 import os
 from pathlib import Path
@@ -16,8 +16,8 @@ def tag(a_pos, a_neg, teacher_frames):
     return f"ap{a_pos:g}_an{a_neg:g}_tf{teacher_frames}"
 
 
-def summarize(frame, run, vh_split):
-    """Một dòng: (VH pair acc, VH Q acc, EH acc) và số câu đổi đúng/sai trên tập đánh giá."""
+def summarize(frame, run, vh_split, eh_split):
+    """One row of VH and EH metrics for the selected held-out splits."""
     rows = frame[frame["run"] == run].set_index("split")
     if rows.empty:
         return None
@@ -28,11 +28,11 @@ def summarize(frame, run, vh_split):
     return {
         "VH pair acc": get(vh_split, "pair_acc"),
         "VH Q acc": get(vh_split, "q_acc"),
-        "EH acc": get("EH_ALL", "q_acc"),
+        "EH acc": get(eh_split, "q_acc"),
         "VH w2c": get(vh_split, "wrong_to_correct"),
         "VH c2w": get(vh_split, "correct_to_wrong"),
-        "EH w2c": get("EH_ALL", "wrong_to_correct"),
-        "EH c2w": get("EH_ALL", "correct_to_wrong"),
+        "EH w2c": get(eh_split, "wrong_to_correct"),
+        "EH c2w": get(eh_split, "correct_to_wrong"),
     }
 
 
@@ -51,6 +51,7 @@ def main():
     parser.add_argument("--fixed-an", type=float, default=0.25)
     parser.add_argument("--teacher-frames", type=int, default=32)
     parser.add_argument("--vh-split", default="VH_TEST", choices=["VH_TEST", "VH_VAL"])
+    parser.add_argument("--eh-split", default="EH_ALL", choices=["EH_ALL", "EH_TEST", "EH_VAL"])
     parser.add_argument("--out", type=Path, default=None)
     args = parser.parse_args()
 
@@ -78,7 +79,7 @@ def main():
                 continue
             frame = pd.read_csv(path)
             for method, run in (("Base_fix", "seed_base_s0"), ("Adaptive", f"{arm}_s0")):
-                summary = summarize(frame, run, args.vh_split)
+                summary = summarize(frame, run, args.vh_split, args.eh_split)
                 if summary is None:
                     out_rows.append({"Arm": label, "max a": v, "a_pos": ap, "a_neg": an, "Method": f"{method} (missing)"})
                 else:

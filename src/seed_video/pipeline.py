@@ -6,6 +6,7 @@ from .runtime import Runtime
 
 SETUP = (
     "provenance", "config", "data.videohallucer", "data.eventhallusion",
+    "data.experiment_split",
     "data.video", "models.foreground", "models.qwen", "teachers.views",
     "teachers.composition", "training.losses", "training.trainer",
     "experiments.components",

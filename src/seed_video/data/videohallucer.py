@@ -49,6 +49,14 @@ def _dl(runtime, p):
     return runtime.hf_hub_download(runtime.CFG['hf_repo'], p, repo_type='dataset', revision=runtime.CFG['hf_revision'], local_dir=runtime.ROOT, token=runtime.CFG['hf_token'])
 
 def run(runtime):
+    if getattr(runtime.args, 'train_dataset', 'videohallucer') == 'eventhallusion':
+        runtime.TRAIN, runtime.VAL, runtime.TEST = ([], [], [])
+        runtime.ITEMS, runtime.pairs, runtime.pair_ids = ([], {}, [])
+        runtime.ALL_VIDEOS = []
+        runtime.key = MethodType(key, runtime)
+        print('Training dataset is EventHallusion; skipping VideoHallucer data loading')
+        return
+
     from concurrent.futures import ThreadPoolExecutor, as_completed
     runtime.ThreadPoolExecutor = ThreadPoolExecutor
     runtime.as_completed = as_completed

@@ -46,9 +46,11 @@ def run_base_only(runtime):
     runtime.OUT = runtime.Path(runtime.CACHE) / "distillation_methods"
     runtime.RES = runtime.OUT / "runs" / tag
     runtime.RES.mkdir(parents=True, exist_ok=True)
-    runtime.SPLITS = {"VH_VAL": runtime.VAL, "VH_TEST": runtime.TEST, "EH_ALL": runtime.EH}
-    for subset in sorted({item["subset"] for item in runtime.EH}):
-        runtime.SPLITS[subset] = [item for item in runtime.EH if item["subset"] == subset]
+    runtime.SPLITS = (
+        runtime.configure_eval_splits()
+        if hasattr(runtime, "configure_eval_splits")
+        else {"VH_VAL": runtime.VAL, "VH_TEST": runtime.TEST, "EH_ALL": runtime.EH}
+    )
     runtime.result_rows = MethodType(result_rows, runtime)
     runtime.save_distillation_results = MethodType(_save_results, runtime)
 
@@ -109,9 +111,11 @@ def run(runtime, methods):
     runtime.STUDENT_DIR = str(runtime.RES / "students")
     runtime.RES.mkdir(parents=True, exist_ok=True)
     runtime.os.makedirs(runtime.STUDENT_DIR, exist_ok=True)
-    runtime.SPLITS = {"VH_VAL": runtime.VAL, "VH_TEST": runtime.TEST, "EH_ALL": runtime.EH}
-    for subset in sorted({item["subset"] for item in runtime.EH}):
-        runtime.SPLITS[subset] = [item for item in runtime.EH if item["subset"] == subset]
+    runtime.SPLITS = (
+        runtime.configure_eval_splits()
+        if hasattr(runtime, "configure_eval_splits")
+        else {"VH_VAL": runtime.VAL, "VH_TEST": runtime.TEST, "EH_ALL": runtime.EH}
+    )
     runtime.result_rows = MethodType(result_rows, runtime)
     runtime.save_distillation_results = MethodType(_save_results, runtime)
     runtime.MARG = {}

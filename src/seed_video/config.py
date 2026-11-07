@@ -45,14 +45,26 @@ def run(runtime):
     runtime.torch.backends.cudnn.allow_tf32 = True
     runtime.CFG = dict(model_id='Qwen/Qwen3-VL-8B-Instruct', birefnet_id='ZhengPeng7/BiRefNet', hf_repo='bigai-nlco/VideoHallucer', hf_revision='c93475bf1be466c1af90d005749ccb4e6b3ad066', data_root='/content/VideoHallucer', subsets=['temporal', 'object_relation'], download_workers=8, hf_token=None, n_train_pairs=150, n_val_pairs=50, n_test_pairs=300, split_seed=0, n_frames=16, frame_size=448, alpha=0.8, alpha_s=0.8, beta=0.4, fg_thr=0.15, fg_kernel=5, fg_avg_weight=0.7, fg_soft=False, tcd_frames=4, seed_noise_alpha=0.3, a_pos=1, a_tcd=0.25, plaus_beta=0.1, lora_r=16, lora_alpha=32, lora_dropout=0.05, lr=0.0001, epochs=2, grad_accum=8, seeds=[0], hinton_T=2.0, p_open=0.5, open_prompt='Describe what happens in the video in temporal order, mentioning the main objects and actions.', open_max_new=48, yn_max_new=4, gen_temp=1.0, jsd_beta=0.5, tvdf_keep=0.5, tvdf_use_gt=False, seed_groups=4, seed_betas=(1.1, 0.8, 0.6, 0.4), seed_gamma=0.1, grad_ckpt=True, eval_train=True, teachers=['T_pos', 'T_tcd', 'T_pos_tcd'], methods=['kd_basic', 'seed', 'seed_nolabel'], controls=[], seq_plaus=True, opsd_anchor=1.0, control_teachers=['T_base', 'T_posrand_tcd', 'T_noise'], a_noise=0.5, best_method='auto', best_pool='nolabel', eh=dict(enable=True, gdrive_id='1IPmx6Y80UrXwVPmZJh6zjCPHtlsw4p9n', q_commit='aa544c21c7cd93b4685423cb94f77ab441f754bc', splits=['entire', 'mix', 'misleading'], allow_missing=False))
     runtime.CFG['model_id'] = os.environ.get('SEED_MODEL_ID', runtime.CFG['model_id'])
+    runtime.CFG['train_dataset'] = runtime.args.train_dataset
     if runtime.FAST:
         runtime.CFG.update(n_frames=8, tcd_frames=4, epochs=1, grad_ckpt=False, eval_train=True, open_max_new=32)
     smoke_pairs = getattr(runtime.args, 'smoke_pairs', None)
+    if runtime.CFG['train_dataset'] == 'eventhallusion':
+        train_fraction = runtime.args.eh_train_fraction
+        val_fraction = runtime.args.eh_val_fraction
+        if not (0 < train_fraction < 1 and 0 < val_fraction < 1
+                and train_fraction + val_fraction < 1):
+            raise ValueError('EventHallusion train/val fractions must be positive and sum to less than 1.')
+        if runtime.args.no_eh:
+            raise ValueError('--no-eh cannot be used when EventHallusion is the training dataset.')
     if smoke_pairs is not None:
         if smoke_pairs < 1:
             raise ValueError('--smoke-pairs must be >= 1')
-        runtime.CFG.update(subsets=['temporal'], n_train_pairs=smoke_pairs, n_val_pairs=1, n_test_pairs=1)
-        print(f'SMOKE mode: temporal only; train={smoke_pairs} pair(s), val=1 pair, test=1 pair; EventHallusion disabled')
+        if runtime.CFG['train_dataset'] == 'videohallucer':
+            runtime.CFG.update(subsets=['temporal'], n_train_pairs=smoke_pairs, n_val_pairs=1, n_test_pairs=1)
+            print(f'SMOKE mode: temporal only; train={smoke_pairs} pair(s), val=1 pair, test=1 pair; EventHallusion disabled')
+        else:
+            print(f'SMOKE mode: EventHallusion; train={smoke_pairs} video(s), val=1 video, test=1 video')
     teacher_frames = getattr(runtime.args, 'teacher_frames', None) or runtime.CFG['n_frames']
     assert teacher_frames % 2 == 0 and teacher_frames >= runtime.CFG['tcd_frames'], 'teacher_frames phải chẵn và >= tcd_frames'
     runtime.CFG['teacher_frames'] = teacher_frames
@@ -63,7 +75,9 @@ def run(runtime):
     from seed_video.models import model_spec
     _, runtime.CFG['spatial_stride'] = model_spec(runtime.CFG['model_id'])
     runtime.CFG['feature_temporal_stride'] = 1 if runtime.CFG['model_id'].startswith('OpenGVLab/InternVL3_5-') else 2
-    runtime.CFG['eh']['enable'] = not runtime.args.no_eh and smoke_pairs is None
+    runtime.CFG['eh']['enable'] = not runtime.args.no_eh and (
+        smoke_pairs is None or runtime.CFG['train_dataset'] == 'eventhallusion'
+    )
     runtime.CFG['eh']['root'] = str(runtime.WORK / 'EventHallusion')
     runtime.CACHE = str(runtime.WORK / f"cdt_distill_cache_f{runtime.CFG['n_frames']}_{runtime.CFG['frame_size']}")
     runtime.CFG['cache_dir'] = runtime.CACHE

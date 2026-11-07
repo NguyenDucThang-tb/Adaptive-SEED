@@ -479,3 +479,27 @@ Dừng một job: `qdel <jobid>`. Dừng cả chuỗi: `qdel $(qselect -u $USER 
 lquota
 du -sh $WORK/cdt_distill_cache_f8_448/*
 ```
+
+## 10. Train và đánh giá trên EventHallusion
+
+`--train-dataset eventhallusion` chia theo video, stratified theo `entire/mix/misleading`, mặc định 70/10/20. Một video và mọi câu hỏi của nó chỉ thuộc một split. Manifest nằm ở `eventhallusion_train_val_test.json`; kết quả chỉ chấm validation/test, không tính câu train vào accuracy. TempCompass không thuộc thí nghiệm này.
+
+Work-dir cần có `EventHallusion/questions/{entire,mix,misleading}_questions.json` và video đủ `entire=109`, `interleave=193`, `misleading=95`. Có thể symlink `WORK/EventHallusion` tới một bản dataset chỉ đọc trên GData để các job dùng chung dữ liệu mà không nhân bản video. Mỗi job vẫn cần `WORK` riêng để tránh tranh cache/checkpoint.
+
+Các split trong `results.csv` là `EH_VAL`, `EH_TEST` và `eh_entire_TEST`, `eh_mix_TEST`, `eh_misleading_TEST`. `EH_TEST` là tổng held-out test, không phải toàn bộ benchmark gốc. Dùng `scripts/collect_exp1.py --eh-split EH_TEST` để tổng hợp các arm.
+
+Ví dụ chạy smoke một video train, một validation và một test bằng Qwen2.5-VL-7B:
+
+```bash
+EH_DATA=/g/data/hn98/$USER/datasets/EventHallusion   # sửa theo đúng nơi nhóm đã chuyển dataset
+WORK=/g/data/hn98/$USER/projects/adaptive_seed/runs/eh_qwen25_smoke
+mkdir -p "$WORK"
+ln -s "$EH_DATA" "$WORK/EventHallusion"
+
+qsub -l walltime=00:30:00 \
+  -v "ENV_ARCHIVE=/g/data/hn98/envs/${USER}_qwen25.tar.gz,HF_HOME=/g/data/hn98/${USER}/models/hf_cache_qwen25,SEED_MODEL_ID=Qwen/Qwen2.5-VL-7B-Instruct,TRAIN_DATASET=eventhallusion,SMOKE_PAIRS=1,BASE_ONLY=1,A_POS=0.9,A_NEG=0.25,WORK=$WORK" \
+  -N eh_q25_smoke \
+  scripts/run_exp1.pbs
+```
+
+Smoke `base-only` chỉ kiểm tra model, dữ liệu, split và đánh giá. Trước khi full run, smoke riêng `kd_basic`, `onpolicy_gkd`, `video_opd` và một arm adaptive; mỗi distillation job cần đúng một method. Không dùng kết quả smoke để báo cáo.

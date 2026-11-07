@@ -1,5 +1,5 @@
 #!/bin/bash
-# Thực nghiệm 1a: Answer-gain adaptive. Mỗi job quét 5 ngưỡng cho một arm.
+# Thực nghiệm answer-gain adaptive. Mỗi job quét các ngưỡng đã truyền vào.
 #   qsub -v ARM=adaptive_pos_only run_exp1.pbs
 #   qsub -v ARM=adaptive_neg_only run_exp1.pbs
 #   qsub -v ARM=adaptive_pos_neg  run_exp1.pbs
@@ -12,8 +12,8 @@
 #PBS -l ngpus=1
 #PBS -l mem=160GB
 #PBS -l jobfs=100GB
-#PBS -l walltime=24:00:00
-#PBS -l storage=scratch/hn98+scratch/jp09
+#PBS -l walltime=02:00:00
+#PBS -l storage=scratch/hn98+scratch/jp09+gdata/hn98
 #PBS -l wd
 #PBS -j oe
 
@@ -28,6 +28,17 @@ FIXED_AP="${FIXED_AP:-0.9}"     # a_pos mặc định khi chỉ quét a_neg
 FIXED_AN="${FIXED_AN:-0.25}"    # a_neg mặc định khi chỉ quét a_pos
 WORK="${WORK:-/scratch/hn98/$USER/runs/exp1}"
 TEACHER_FRAMES="${TEACHER_FRAMES:-32}"   # student giữ 8 frame, teacher dùng 32 frame
+TRAIN_DATASET_ARGS=()
+if [[ -n "${TRAIN_DATASET:-}" ]]; then
+  TRAIN_DATASET_ARGS=(--train-dataset "$TRAIN_DATASET")
+fi
+if [[ "${TRAIN_DATASET:-videohallucer}" == "eventhallusion" ]]; then
+  TRAIN_DATASET_ARGS+=(
+    --eh-train-fraction "${EH_TRAIN_FRACTION:-0.7}"
+    --eh-val-fraction "${EH_VAL_FRACTION:-0.1}"
+    --eh-split-seed "${EH_SPLIT_SEED:-42}"
+  )
+fi
 DISTILL_ARGS=()
 if [[ -n "${DISTILL_METHODS:-}" ]]; then
   DISTILL_METHODS="${DISTILL_METHODS//:/ }"
@@ -36,12 +47,26 @@ if [[ -n "${DISTILL_METHODS:-}" ]]; then
 fi
 SMOKE_ARGS=()
 if [[ -n "${SMOKE_PAIRS:-}" ]]; then
-  SMOKE_ARGS=(--smoke-pairs "$SMOKE_PAIRS" --no-eh)
+  SMOKE_ARGS=(--smoke-pairs "$SMOKE_PAIRS")
+  if [[ "${TRAIN_DATASET:-videohallucer}" != "eventhallusion" ]]; then
+    SMOKE_ARGS+=(--no-eh)
+  fi
 fi
 
 module load python3/3.11.7 cuda/12.3.2
-PYTHON_ENV="${PYTHON_ENV:-/scratch/hn98/$USER/venv}"
-source "$PYTHON_ENV/bin/activate"
+if [[ -n "${ENV_ARCHIVE:-}" ]]; then
+  ENV_ROOT="${PBS_JOBFS:?PBS_JOBFS is required}/env"
+  mkdir -p "$ENV_ROOT"
+  tar -xzf "$ENV_ARCHIVE" -C "$ENV_ROOT"
+  unset PYTHONHOME PYTHONPATH
+  export PYTHONNOUSERSITE=1
+  PYTHONPATH= "$ENV_ROOT/bin/python" "$ENV_ROOT/bin/conda-unpack"
+  export PATH="$ENV_ROOT/bin:$PATH"
+  export CONDA_PREFIX="$ENV_ROOT" CONDA_DEFAULT_ENV="$ENV_ROOT"
+else
+  PYTHON_ENV="${PYTHON_ENV:-/scratch/hn98/$USER/venv}"
+  source "$PYTHON_ENV/bin/activate"
+fi
 
 HF_HOME="${HF_HOME:-/scratch/hn98/$USER/hf_cache}"
 export HF_HOME
@@ -58,7 +83,7 @@ run_point() {
     echo "===== BASE ONLY | a_pos=$AP a_neg=$AN | $(date) ====="
     python -m seed_video --stage core --work-dir "$WORK" \
       --a-pos "$AP" --a-neg "$AN" --teacher-frames "$TEACHER_FRAMES" \
-      --base-only "${SMOKE_ARGS[@]}"
+      --base-only "${TRAIN_DATASET_ARGS[@]}" "${SMOKE_ARGS[@]}"
     return
   fi
   if [[ -n "${DISTILL_METHODS:-}" ]]; then
@@ -86,11 +111,11 @@ run_point() {
     [[ ${#DISTILL_LIST[@]} -eq 1 ]] || { echo "Một job distillation cần đúng một method"; exit 2; }
     python -m seed_video --stage core --work-dir "$WORK" \
       --a-pos "$AP" --a-neg "$AN" --teacher-frames "$TEACHER_FRAMES" \
-      --arms seed_base "${DISTILL_ARGS[@]}" "${SMOKE_ARGS[@]}"
+      --arms seed_base "${DISTILL_ARGS[@]}" "${TRAIN_DATASET_ARGS[@]}" "${SMOKE_ARGS[@]}"
   else
     python -m seed_video --stage core --work-dir "$WORK" \
       --a-pos "$AP" --a-neg "$AN" --teacher-frames "$TEACHER_FRAMES" --arms seed_base "$ARM" \
-      "${SMOKE_ARGS[@]}"
+      "${TRAIN_DATASET_ARGS[@]}" "${SMOKE_ARGS[@]}"
   fi
 }
 
