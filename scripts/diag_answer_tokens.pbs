@@ -1,0 +1,22 @@
+#!/bin/bash
+# Short GPU job: print the tokens the model predicts at the yes/no answer position.
+#   qsub -v "PYTHON_ENV=...,HF_HUB_CACHE=...,SEED_MODEL_ID=...,WORK=..." scripts/diag_answer_tokens.pbs
+#PBS -P hn98
+#PBS -N diag_tokens
+#PBS -q gpuhopper
+#PBS -l ncpus=12
+#PBS -l ngpus=1
+#PBS -l mem=96GB
+#PBS -l walltime=00:20:00
+#PBS -l storage=scratch/hn98+scratch/jp09+gdata/hn98
+#PBS -l wd
+#PBS -j oe
+
+set -euo pipefail
+: "${WORK:?Pass WORK=<work-dir with EventHallusion/>}"
+module load python3/3.11.7 cuda/12.3.2
+source "${PYTHON_ENV:?Pass PYTHON_ENV}/bin/activate"
+export HF_HUB_CACHE="${HF_HUB_CACHE:?Pass HF_HUB_CACHE}"
+export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+export PYTHONPATH="$PWD/src"
+python scripts/diag_answer_tokens.py --work-dir "$WORK" --videos "${VIDEOS:-4}" --teacher-frames "${TEACHER_FRAMES:-32}"
