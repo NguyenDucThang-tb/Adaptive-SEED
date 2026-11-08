@@ -1,7 +1,7 @@
 import unittest
 from types import SimpleNamespace
 
-from seed_video.models.qwen import build_inputs, model_spec
+from seed_video.models.qwen import answer_words, build_inputs, model_spec
 
 
 class FakeTensor:
@@ -73,6 +73,14 @@ class QwenModelSpecTests(unittest.TestCase):
                 "frames_indices": list(range(32)),
             }],
         )
+
+
+class AnswerWordTests(unittest.TestCase):
+    def test_qwen3_uses_lowercase_answer_tokens(self):
+        self.assertEqual(answer_words("Qwen/Qwen3-VL-8B-Instruct"), ("yes", "no"))
+
+    def test_qwen25_keeps_capitalized_answer_tokens(self):
+        self.assertEqual(answer_words("Qwen/Qwen2.5-VL-7B-Instruct"), ("Yes", "No"))
 
 
 if __name__ == "__main__":

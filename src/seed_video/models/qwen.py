@@ -13,6 +13,13 @@ def model_spec(model_id):
     except KeyError as exc:
         raise ValueError(f'Unsupported Qwen model: {model_id}') from exc
 
+# Token spelling each model actually emits after "Answer with yes or no.".
+# Qwen3-VL answers lowercase (~99% mass on 'yes'/'no', <0.5% on 'Yes'/'No').
+ANSWER_WORDS = {'Qwen/Qwen3-VL-8B-Instruct': ('yes', 'no')}
+
+def answer_words(model_id):
+    return ANSWER_WORDS.get(model_id, ('Yes', 'No'))
+
 def build_inputs(runtime, frames, question, fps, yn=True):
     msgs = [{'role': 'user', 'content': [{'type': 'video'}, {'type': 'text', 'text': question.strip() + ('\nAnswer with yes or no.' if yn else '')}]}]
     text = runtime.processor.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True)
@@ -106,8 +113,10 @@ def run(runtime):
             runtime.HEAD.keep = old
     runtime.keep_last = keep_last
     runtime.tok = runtime.processor.tokenizer
-    runtime.YES = runtime.tok.encode('Yes', add_special_tokens=False)[0]
-    runtime.NO = runtime.tok.encode('No', add_special_tokens=False)[0]
+    yes_word, no_word = answer_words(runtime.CFG['model_id'])
+    runtime.YES = runtime.tok.encode(yes_word, add_special_tokens=False)[0]
+    runtime.NO = runtime.tok.encode(no_word, add_special_tokens=False)[0]
+    print(f'answer tokens: {yes_word!r}={runtime.YES} {no_word!r}={runtime.NO}')
     runtime.VID_TOK = getattr(runtime.model.config, 'video_token_id', None) or runtime.tok.convert_tokens_to_ids('<|video_pad|>')
     backbone = getattr(runtime.model, 'model', runtime.model)
     runtime.VISUAL = getattr(runtime.model, 'visual', getattr(backbone, 'visual', None))
