@@ -126,6 +126,20 @@ def student_cfg(runtime, name, seed):
     d.update(source=runtime.SOURCE_HASH, abl=runtime.ABL, flags=runtime.ARMS[name], teacher=runtime.BASE_TEACHER, train_content=[runtime.item_sig(i) for i in runtime.TRAIN], eval_content=[runtime.item_sig(i) for i in runtime.eval_set()], confidence_cuts=runtime._qt.tolist(), target_digest=runtime.hashlib.sha256(b''.join((runtime.TARGETS_ABL[name][runtime.key(i)].numpy().tobytes() for i in runtime.TRAIN))).hexdigest())
     return d
 
+def resolve_arm_run(arms, requested, coverage):
+    """Arms to train. Pair-gate arms need eligible TRAIN items: drop them from the
+    default set when there are none, but fail if the user asked for them explicitly."""
+    pair_arms = [name for name in (requested or arms) if arms[name][1]]
+    if coverage or not pair_arms:
+        return list(requested or arms)
+    if requested:
+        raise ValueError(
+            'Selected arms require pair-gate examples, but this training split has none: '
+            + ', '.join(pair_arms)
+        )
+    print('Pair gate has no eligible TRAIN items; skipping arms:', pair_arms)
+    return [name for name in arms if not arms[name][1]]
+
 def dispatch_distillation(runtime):
     methods = getattr(runtime.args, 'distill_methods', None)
     if not methods:
@@ -181,12 +195,7 @@ def run(runtime):
     print('Pair gate eligible:', runtime.coverage, '/', len(runtime.TRAIN), 'mode:', runtime.ABL['pair_mode'])
     if dispatch_distillation(runtime):
         return
-    pair_arms = [name for name in runtime.ARM_RUN if runtime.ARMS[name][1]]
-    if pair_arms and not runtime.coverage:
-        raise ValueError(
-            'Selected arms require pair-gate examples, but this training split has none: '
-            + ', '.join(pair_arms)
-        )
+    runtime.ARM_RUN = resolve_arm_run(runtime.ARMS, getattr(runtime.args, 'arms', None), runtime.coverage)
     runtime._conf = {k: runtime.torch.log_softmax(r['orig'], 0).max().item() for k, r in runtime.SHARED.items()}
     runtime._qt = runtime.np.quantile(list(runtime._conf.values()), runtime.np.linspace(0, 1, runtime.CFG['seed_groups'] + 1)[1:-1])
     runtime.TARGETS_ABL = {}

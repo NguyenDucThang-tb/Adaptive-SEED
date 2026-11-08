@@ -109,6 +109,8 @@ def run(runtime):
     train_videos = {item['video'] for item in train}
     val_videos = {item['video'] for item in val}
     test_videos = {item['video'] for item in test}
+    # Foreground masks are only needed for videos in the (possibly smoke-trimmed) splits.
+    runtime.ALL_VIDEOS = sorted(train_videos | val_videos | test_videos)
     manifest = {
         'dataset': 'eventhallusion',
         'seed': args.eh_split_seed,
