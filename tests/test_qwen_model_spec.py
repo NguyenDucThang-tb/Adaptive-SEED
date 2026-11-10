@@ -76,8 +76,9 @@ class QwenModelSpecTests(unittest.TestCase):
 
 
 class AnswerWordTests(unittest.TestCase):
-    def test_qwen3_uses_lowercase_answer_tokens(self):
-        self.assertEqual(answer_words("Qwen/Qwen3-VL-8B-Instruct"), ("yes", "no"))
+    def test_qwen3_uses_capitalized_answer_tokens(self):
+        # Shared protocol: every backbone is scored on Yes/No, Qwen3 included.
+        self.assertEqual(answer_words("Qwen/Qwen3-VL-8B-Instruct"), ("Yes", "No"))
 
     def test_qwen25_keeps_capitalized_answer_tokens(self):
         self.assertEqual(answer_words("Qwen/Qwen2.5-VL-7B-Instruct"), ("Yes", "No"))

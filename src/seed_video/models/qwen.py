@@ -13,9 +13,12 @@ def model_spec(model_id):
     except KeyError as exc:
         raise ValueError(f'Unsupported Qwen model: {model_id}') from exc
 
-# Token spelling each model actually emits after "Answer with yes or no.".
-# Qwen3-VL answers lowercase (~99% mass on 'yes'/'no', <0.5% on 'Yes'/'No').
-ANSWER_WORDS = {'Qwen/Qwen3-VL-8B-Instruct': ('yes', 'no')}
+# Answer tokens of the yes/no margin, CE target and teacher compositions: 'Yes'/'No' for every model,
+# the protocol of the reported Qwen3 results and of the shared evaluation spec (OPA-DPO-Video
+# docs/unified_config.md). Qwen3-VL itself answers lowercase (~99% mass on 'yes'/'no', <0.5% on
+# 'Yes'/'No'; see scripts/diag_answer_tokens.py), so its 'Yes'/'No' margin can disagree with the
+# answer it would generate. Map a model to ('yes', 'no') here to score it on lowercase instead.
+ANSWER_WORDS = {}
 
 def answer_words(model_id):
     return ANSWER_WORDS.get(model_id, ('Yes', 'No'))
