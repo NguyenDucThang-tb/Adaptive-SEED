@@ -39,6 +39,13 @@ if [[ "${TRAIN_DATASET:-videohallucer}" == "eventhallusion" ]]; then
     --eh-split-seed "${EH_SPLIT_SEED:-42}"
   )
 fi
+if [[ "${EVAL_VIDEOHALLUCER:-0}" == "1" ]]; then
+  [[ "${TRAIN_DATASET:-videohallucer}" == "eventhallusion" ]] || {
+    echo "EVAL_VIDEOHALLUCER=1 currently requires TRAIN_DATASET=eventhallusion"
+    exit 2
+  }
+  TRAIN_DATASET_ARGS+=(--eval-videohallucer)
+fi
 DISTILL_ARGS=()
 if [[ -n "${DISTILL_METHODS:-}" ]]; then
   DISTILL_METHODS="${DISTILL_METHODS//:/ }"

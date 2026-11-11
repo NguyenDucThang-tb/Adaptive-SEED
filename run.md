@@ -503,3 +503,61 @@ qsub -l walltime=00:30:00 \
 ```
 
 Smoke `base-only` chỉ kiểm tra model, dữ liệu, split và đánh giá. Trước khi full run, smoke riêng `kd_basic`, `onpolicy_gkd`, `video_opd` và một arm adaptive; mỗi distillation job cần đúng một method. Không dùng kết quả smoke để báo cáo.
+
+## 11. Train trên EventHallusion, đánh giá checkpoint trên VideoHallucer
+
+Đặt `EVAL_VIDEOHALLUCER=1` để mỗi checkpoint chỉ train trên EventHallusion, rồi được đánh giá trên cả `EH_VAL/EH_TEST` và `VH_VAL/VH_TEST`. VH dùng đúng split cố định của benchmark; VH train không được đưa vào train hoặc metric. Chọn hệ số bằng validation (`VH_VAL` và `EH_VAL`), sau đó chỉ báo cáo test cho cấu hình đã chọn.
+
+Grid gồm 36 cặp `a_pos:a_neg` với mỗi trục `{0, 0.25, 0.5, 0.75, 0.9, 1}`. Giá trị 0 bao gồm hai biên Only Pos/Only Neg. Mỗi điểm huấn luyện `seed_base` và `adaptive_pos_neg`. Dùng một WORK riêng cho mỗi model; các điểm trong grid chạy tuần tự và tái sử dụng cache. Mỗi lượt PBS tối đa 2 giờ. Nếu grid chưa xong khi hết walltime, đợi job kết thúc rồi submit lại nguyên grid với cùng WORK: điểm hoàn chỉnh được skip, điểm dở tiếp tục từ checkpoint.
+
+Đã chuẩn bị dataset symlink, HF model cache và Conda archive cho cả hai model. Tạo chuỗi 36 cặp và hàm submit:
+
+```bash
+PAIRS=""
+GRID_PAIRS=()
+for ap in 0 0.25 0.5 0.75 0.9 1; do
+  for an in 0 0.25 0.5 0.75 0.9 1; do
+    PAIRS="${PAIRS:+$PAIRS;}$ap:$an"
+    GRID_PAIRS+=("$ap:$an")
+  done
+done
+
+submit_grid() {
+  local model_id="$1" env_archive="$2" hf_home="$3" hf_hub_cache="$4" work="$5" prefix="$6"
+  local vars name log
+  mkdir -p "$work" "$LOG_DIR"
+  name="${prefix}_$(date +%Y%m%dT%H%M%S)"
+  log="$LOG_DIR/$name"
+  vars="ENV_ARCHIVE=$env_archive,HF_HOME=$hf_home,HF_HUB_CACHE=$hf_hub_cache,SEED_MODEL_ID=$model_id,WORK=$work,TRAIN_DATASET=eventhallusion,EVAL_VIDEOHALLUCER=1,EH_TRAIN_FRACTION=0.7,EH_VAL_FRACTION=0.1,EH_SPLIT_SEED=42,TEACHER_FRAMES=32,ARM=adaptive_pos_neg,PAIRS=$PAIRS"
+  qsub -l walltime=02:00:00 -v "$vars" \
+    -N "$name" -o "${log}.out" -e "${log}.err" scripts/run_exp1.pbs
+}
+```
+
+Gọi hàm riêng cho từng model bằng archive/cache tương ứng:
+
+```bash
+LOG_DIR=/g/data/hn98/$USER/projects/adaptive_seed/logs
+unset PAIR
+submit_grid Qwen/Qwen2.5-VL-7B-Instruct "$Q25_ENV_ARCHIVE" "$Q25_HF_HOME" "$Q25_HF_HUB_CACHE" "$Q25_WORK" q25_eh_vh
+submit_grid Qwen/Qwen3-VL-8B-Instruct "$Q3_ENV_ARCHIVE" "$Q3_HF_HOME" "$Q3_HF_HUB_CACHE" "$Q3_WORK" q3_eh_vh
+```
+
+Nếu hết walltime, kiểm tra trạng thái rồi submit lại nguyên lệnh của model đó với cùng WORK. Không submit lượt mới khi job cũ còn chạy.
+
+Sau khi tất cả điểm hoàn tất, tổng hợp validation để chọn cấu hình:
+
+```bash
+PAIRS=(0:0 0:0.25 0:0.5 0:0.75 0:0.9 0:1 \
+  0.25:0 0.25:0.25 0.25:0.5 0.25:0.75 0.25:0.9 0.25:1 \
+  0.5:0 0.5:0.25 0.5:0.5 0.5:0.75 0.5:0.9 0.5:1 \
+  0.75:0 0.75:0.25 0.75:0.5 0.75:0.75 0.75:0.9 0.75:1 \
+  0.9:0 0.9:0.25 0.9:0.5 0.9:0.75 0.9:0.9 0.9:1 \
+  1:0 1:0.25 1:0.5 1:0.75 1:0.9 1:1)
+python scripts/collect_exp1.py --work "$Q25_WORK" --both-pairs "${GRID_PAIRS[@]}" \
+  --vh-split VH_VAL --eh-split EH_VAL --out "$Q25_WORK/grid_validation.csv"
+python scripts/collect_exp1.py --work "$Q3_WORK" --both-pairs "${GRID_PAIRS[@]}" \
+  --vh-split VH_VAL --eh-split EH_VAL --out "$Q3_WORK/grid_validation.csv"
+```
+
+Chỉ sau khi chọn cấu hình theo validation, lấy hàng `VH_TEST` và `EH_TEST` cho đúng cặp đó để báo cáo held-out performance. So sánh `adaptive_pos_neg_s0` với `seed_base_s0` trong cùng điểm để kiểm tra kỳ vọng `Acc(our method) >= Acc(Base)`.

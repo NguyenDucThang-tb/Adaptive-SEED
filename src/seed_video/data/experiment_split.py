@@ -72,6 +72,11 @@ def configure_eval_splits(runtime):
         for subset in sorted({item['subset'] for item in runtime.EH_TEST}):
             short = subset.removeprefix('eh_')
             splits[f'eh_{short}_TEST'] = [item for item in runtime.EH_TEST if item['subset'] == subset]
+        if getattr(runtime.args, 'eval_videohallucer', False):
+            if not getattr(runtime, 'VH_VAL', None) or not getattr(runtime, 'VH_TEST', None):
+                raise ValueError('VideoHallucer evaluation was requested, but VH_VAL/VH_TEST are unavailable.')
+            splits['VH_VAL'] = runtime.VH_VAL
+            splits['VH_TEST'] = runtime.VH_TEST
         return splits
 
     splits = {'VH_VAL': runtime.VAL, 'VH_TEST': runtime.TEST, 'EH_ALL': runtime.EH}

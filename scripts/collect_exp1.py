@@ -57,7 +57,12 @@ def main():
 
     root = args.work / "cdt_distill_cache_f8_448" / "seed_component_ablation" / "runs"
     out_rows = []
-    for label, (arm, coeffs) in ARMS.items():
+    selected_arms = (
+        [("Both", ARMS["Both"])]
+        if args.both_pairs is not None
+        else list(ARMS.items())
+    )
+    for label, (arm, coeffs) in selected_arms:
         if label == "Both" and args.both_pairs is not None:
             points = []
             for pair in args.both_pairs:

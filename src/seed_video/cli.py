@@ -15,6 +15,8 @@ def main(argv=None):
     parser.add_argument("--train-dataset", choices=["videohallucer", "eventhallusion"],
                         default="videohallucer",
                         help="Dataset used for the train/validation/test split.")
+    parser.add_argument("--eval-videohallucer", action="store_true",
+                        help="When training on EventHallusion, also evaluate the checkpoint on VideoHallucer val/test.")
     parser.add_argument("--eh-train-fraction", type=float, default=0.7)
     parser.add_argument("--eh-val-fraction", type=float, default=0.1)
     parser.add_argument("--eh-split-seed", type=int, default=42)

@@ -49,7 +49,9 @@ def _dl(runtime, p):
     return runtime.hf_hub_download(runtime.CFG['hf_repo'], p, repo_type='dataset', revision=runtime.CFG['hf_revision'], local_dir=runtime.ROOT, token=runtime.CFG['hf_token'])
 
 def run(runtime):
-    if getattr(runtime.args, 'train_dataset', 'videohallucer') == 'eventhallusion':
+    train_dataset = getattr(runtime.args, 'train_dataset', 'videohallucer')
+    eval_videohallucer = getattr(runtime.args, 'eval_videohallucer', False)
+    if train_dataset == 'eventhallusion' and not eval_videohallucer:
         runtime.TRAIN, runtime.VAL, runtime.TEST = ([], [], [])
         runtime.ITEMS, runtime.pairs, runtime.pair_ids = ([], {}, [])
         runtime.ALL_VIDEOS = []
@@ -94,6 +96,13 @@ def run(runtime):
     runtime.TRAIN = [i for p in runtime.train_ids for i in runtime.pairs[p]]
     runtime.VAL = [i for p in runtime.val_ids for i in runtime.pairs[p]]
     runtime.TEST = [i for p in runtime.test_ids for i in runtime.pairs[p]]
+    if train_dataset == 'eventhallusion':
+        runtime.VH_VAL = runtime.VAL
+        runtime.VH_TEST = runtime.TEST
+        print(
+            f'VideoHallucer held-out evaluation enabled: '
+            f'val={len(runtime.VH_VAL)} QA, test={len(runtime.VH_TEST)} QA'
+        )
     runtime._v = lambda S: {i['video'] for i in S}
     assert not runtime._v(runtime.TRAIN) & runtime._v(runtime.VAL) and (not runtime._v(runtime.TRAIN) & runtime._v(runtime.TEST)) and (not runtime._v(runtime.VAL) & runtime._v(runtime.TEST)), 'train/val/test chung video'
     if len(runtime.val_ids) < runtime.CFG['n_val_pairs']:

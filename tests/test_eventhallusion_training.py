@@ -5,7 +5,11 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from seed_video.data.experiment_split import run as run_split, split_eventhallusion
+from seed_video.data.experiment_split import (
+    configure_eval_splits,
+    run as run_split,
+    split_eventhallusion,
+)
 from seed_video.evaluation.inference import eval_set
 from seed_video.experiments.components import resolve_arm_run
 
@@ -49,6 +53,52 @@ class EventHallusionTrainingSplitTests(unittest.TestCase):
     def test_rejects_invalid_fractions(self):
         with self.assertRaisesRegex(ValueError, "sum to less than 1"):
             split_eventhallusion(self.items, train_fraction=0.8, val_fraction=0.2)
+
+    def test_eventhallusion_training_can_add_held_out_videohallucer_eval(self):
+        eh_val = [{"subset": "eh_mix", "pair_id": "eh/val/0", "role": "eh"}]
+        eh_test = [{"subset": "eh_entire", "pair_id": "eh/test/0", "role": "eh"}]
+        vh_val = [{"subset": "temporal", "pair_id": "vh/val", "role": "basic"}]
+        vh_test = [{"subset": "temporal", "pair_id": "vh/test", "role": "basic"}]
+        runtime = SimpleNamespace(
+            args=SimpleNamespace(train_dataset="eventhallusion", eval_videohallucer=True),
+            EH_VAL=eh_val,
+            EH_TEST=eh_test,
+            EH_SPLITS=["eh_entire"],
+            VH_VAL=vh_val,
+            VH_TEST=vh_test,
+        )
+
+        splits = configure_eval_splits(runtime)
+
+        self.assertEqual(splits["EH_VAL"], eh_val)
+        self.assertEqual(splits["EH_TEST"], eh_test)
+        self.assertEqual(splits["VH_VAL"], vh_val)
+        self.assertEqual(splits["VH_TEST"], vh_test)
+
+    def test_eval_set_includes_vh_heldout_but_not_vh_train(self):
+        eh_val = {"pair_id": "eh/val", "role": "eh"}
+        eh_test = {"pair_id": "eh/test", "role": "eh"}
+        vh_val = {"pair_id": "vh/val", "role": "basic"}
+        vh_test = {"pair_id": "vh/test", "role": "basic"}
+        runtime = SimpleNamespace(
+            args=SimpleNamespace(eval_videohallucer=True),
+            CFG={"eval_train": False},
+            TRAIN=[{"pair_id": "vh/train", "role": "basic"}],
+            VAL=[eh_val],
+            TEST=[eh_test],
+            EH=[eh_test],
+            VH_VAL=[vh_val],
+            VH_TEST=[vh_test],
+            EXTRA_EVAL=[],
+            key=lambda item: f"{item['pair_id']}|{item['role']}",
+        )
+
+        selected = eval_set(runtime)
+
+        self.assertEqual(
+            {item["pair_id"] for item in selected},
+            {"eh/val", "eh/test", "vh/val", "vh/test"},
+        )
 
 
     def _runtime(self, work, smoke_pairs=None):
