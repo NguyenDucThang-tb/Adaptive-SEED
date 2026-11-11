@@ -11,7 +11,7 @@ from seed_video.data.experiment_split import (
     split_eventhallusion,
 )
 from seed_video.evaluation.inference import eval_set
-from seed_video.experiments.components import resolve_arm_run
+from seed_video.experiments.components import resolve_arm_run, signature_videos
 
 
 class EventHallusionTrainingSplitTests(unittest.TestCase):
@@ -98,6 +98,26 @@ class EventHallusionTrainingSplitTests(unittest.TestCase):
         self.assertEqual(
             {item["pair_id"] for item in selected},
             {"eh/val", "eh/test", "vh/val", "vh/test"},
+        )
+
+    def test_signature_videos_cover_all_evaluation_items(self):
+        runtime = SimpleNamespace(
+            args=SimpleNamespace(eval_videohallucer=True),
+            CFG={"eval_train": False},
+            TRAIN=[{"video": "/vh/train.mp4", "pair_id": "vh/train", "role": "basic"}],
+            VAL=[],
+            TEST=[],
+            EH=[{"video": "/eh/test.mp4", "pair_id": "eh/test", "role": "eh"}],
+            VH_VAL=[{"video": "/vh/val.mp4", "pair_id": "vh/val", "role": "basic"}],
+            VH_TEST=[{"video": "/vh/test.mp4", "pair_id": "vh/test", "role": "basic"}],
+            EXTRA_EVAL=[],
+            key=lambda item: f"{item['pair_id']}|{item['role']}",
+        )
+        runtime.eval_set = lambda: eval_set(runtime)
+
+        self.assertEqual(
+            signature_videos(runtime),
+            ["/eh/test.mp4", "/vh/test.mp4", "/vh/train.mp4", "/vh/val.mp4"],
         )
 
 

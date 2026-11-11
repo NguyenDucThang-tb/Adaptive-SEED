@@ -14,6 +14,9 @@ def file_sha(runtime, path):
 def item_sig(runtime, it):
     return [runtime.VIDEO_SHA[it['video']], it['question'], it.get('answer'), it.get('pi'), it.get('pi_valid')]
 
+def signature_videos(runtime):
+    return sorted({item['video'] for item in runtime.TRAIN + runtime.eval_set()})
+
 def feature_enhance(runtime, V, fg, alpha, alpha_s, beta):
     enhanced = runtime._original_feature(V, fg, alpha, alpha_s, beta)
     if not runtime.TOKEN_SELECTED:
@@ -179,7 +182,7 @@ def run(runtime):
     print('Original LoRA targets:', runtime.LORA_TARGETS)
     print('Original SEED CE probability:', runtime.CFG['seed_gamma'])
     runtime.file_sha = MethodType(file_sha, runtime)
-    runtime.VIDEO_SHA = {p: runtime.file_sha(p) for p in sorted({i['video'] for i in runtime.TRAIN + runtime.VAL + runtime.TEST + runtime.EH})}
+    runtime.VIDEO_SHA = {p: runtime.file_sha(p) for p in signature_videos(runtime)}
     runtime.item_sig = MethodType(item_sig, runtime)
     runtime._original_feature = runtime.feature_enhance
     runtime.TOKEN_SELECTED = False
