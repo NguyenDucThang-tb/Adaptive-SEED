@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import pickle
+import subprocess
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -210,6 +211,62 @@ class TransferTests(unittest.TestCase):
             self.assertEqual(commands[1][commands[1].index('-W') + 1], 'depend=afterany:2001.gadi-pbs')
             self.assertTrue(all('walltime=01:00:00' in ' '.join(cmd) for cmd in commands))
             self.assertEqual(len({cmd[cmd.index('-v') + 1] for cmd in commands}), 1)
+
+    def test_queue_limit_preserves_accepted_journal_and_stops_cleanly(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            args = SimpleNamespace(root=root, model='qwen25', segments=1,
+                                   eh_data=root / 'eh', vh_data=root / 'vh')
+            args.eh_data.mkdir()
+            args.vh_data.mkdir()
+            config = {'points': driver.entries(False)}
+            driver.atomic_json(root / 'experiment.json', config)
+            calls = []
+            def qsub(cmd, text):
+                calls.append(cmd)
+                if len(calls) == 2:
+                    raise subprocess.CalledProcessError(38, cmd)
+                return '4001.gadi-pbs\n'
+            with patch.object(driver.subprocess, 'check_output', side_effect=qsub), \
+                    contextlib.redirect_stdout(io.StringIO()) as output:
+                self.assertFalse(driver.submit(args, config, SCRIPT.parents[1]))
+            self.assertEqual(len(calls), 2)
+            self.assertIn('SUBMISSION STOPPED', output.getvalue())
+            self.assertEqual(list(driver.submitted_points(root)), [config['points'][0]['id']])
+
+    def test_fill_only_nine_unaccepted_points_while_thirty_one_are_active(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            args = SimpleNamespace(root=root, model='qwen25', segments=1, fill_unsubmitted=True,
+                                   eh_data=root / 'eh', vh_data=root / 'vh')
+            args.eh_data.mkdir()
+            args.vh_data.mkdir()
+            config = {'points': driver.entries(False, both_only=True)}
+            driver.atomic_json(root / 'experiment.json', config)
+            original = ''.join(f'{4000+i}.gadi-pbs\t{p["id"]}\t1\told{i}\n'
+                               for i, p in enumerate(config['points'][:31]))
+            (root / 'jobs.tsv').write_text(original)
+            active = ''.join(f'{4000+i}.gadi-pbs user queue job\n' for i in range(31))
+            commands = []
+            def scheduler(cmd, text):
+                if cmd[0] == 'qstat':
+                    return active
+                commands.append(cmd)
+                return f'{5000 + len(commands)}.gadi-pbs\n'
+            with patch.object(driver.subprocess, 'check_output', side_effect=scheduler), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                self.assertTrue(driver.submit(args, config, SCRIPT.parents[1]))
+            self.assertEqual(len(commands), 9)
+            self.assertIn('EXPERIMENT_POINT=both_ap0p9_an0p75', commands[0][commands[0].index('-v') + 1])
+            self.assertEqual(commands[0][commands[0].index('-W') + 1], 'depend=afterany:4030.gadi-pbs')
+            self.assertNotIn('-W', commands[3])
+            self.assertTrue((root / 'jobs.tsv').read_text().startswith(original))
+            self.assertEqual(len(driver.submitted_points(root)), 40)
+            commands.clear()
+            with patch.object(driver.subprocess, 'check_output', side_effect=scheduler), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                driver.submit(args, config, SCRIPT.parents[1])
+            self.assertEqual(commands, [])
 
     def test_base_evaluation_resumes_after_interruption(self):
         class Torch:

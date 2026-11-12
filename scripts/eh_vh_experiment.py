@@ -69,6 +69,16 @@ def read_results(path):
         return list(csv.DictReader(stream))
 
 
+def submitted_points(root):
+    journal = Path(root) / 'jobs.tsv'
+    points = {}
+    if journal.exists():
+        for line in journal.read_text().splitlines():
+            job, point, segment, label = line.split('\t')
+            points.setdefault(point, []).append(job)
+    return points
+
+
 def complete(root, point):
     work = Path(root) / 'work' / point['id']
     marker = work / 'COMPLETE.json'
@@ -170,6 +180,18 @@ def config_for(args, points, hashes, repo):
 
 
 def submit(args, config, repo):
+    import fcntl
+    args.root.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = args.root.parent / f'.{args.root.name}.submit.lock'
+    with lock_path.open('a') as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise ValueError('Another launcher is submitting this root; do not run two launchers.')
+        return _submit(args, config, repo)
+
+
+def _submit(args, config, repo):
     root = args.root
     saved = root / 'experiment.json'
     if saved.exists():
@@ -178,11 +200,14 @@ def submit(args, config, repo):
     elif root.exists() and any(root.iterdir()):
         raise ValueError('New experiment root must be empty.')
     journal = root / 'jobs.tsv'
+    accepted = submitted_points(root)
+    active_ids = set()
+    fill = getattr(args, 'fill_unsubmitted', False)
     if journal.exists():
         active = subprocess.check_output(['qstat', '-u', os.environ['USER']], text=True)
         active_ids = set(re.findall(r'^\s*(\d+)\.', active, re.MULTILINE))
         previous = {line.split('\t')[0].split('.')[0] for line in journal.read_text().splitlines()}
-        if previous & active_ids:
+        if previous & active_ids and not fill:
             raise ValueError('This experiment still has active jobs; do not submit duplicate workers.')
     if not saved.exists():
         root.mkdir(parents=True, exist_ok=True)
@@ -193,8 +218,14 @@ def submit(args, config, repo):
         atomic_json(saved, config)
     (root / 'logs').mkdir(exist_ok=True)
     parents = {}
+    submitted = 0
     stamp = time.strftime('%Y%m%dT%H%M%S')
     for point in config['points']:
+        if fill and point['id'] in accepted:
+            active_tail = [job for job in accepted[point['id']] if job.split('.')[0] in active_ids]
+            if active_tail:
+                parents[point['group']] = active_tail[-1]
+            continue
         if complete(root, point):
             continue
         work = root / 'work' / point['id']
@@ -207,6 +238,10 @@ def submit(args, config, repo):
                 raise ValueError(f'Unexpected dataset link: {link}')
         previous = parents.get(point['group'])
         for segment in range(args.segments):
+            maximum = getattr(args, 'max_new_jobs', None)
+            if maximum is not None and submitted >= maximum:
+                print(f'STOP: reached --max-new-jobs={maximum}; accepted jobs remain intact.', flush=True)
+                return True
             label = f'{point["id"]}_{stamp}_{segment + 1}'
             cmd = ['qsub', '-P', 'hn98', '-q', 'gpuhopper',
                    '-l', 'ncpus=12,ngpus=1,mem=160GB,jobfs=100GB,walltime=01:00:00',
@@ -217,11 +252,20 @@ def submit(args, config, repo):
             if previous:
                 cmd += ['-W', f'depend=afterany:{previous}']
             cmd += [str(root / 'code/scripts/run_eh_vh_experiment.pbs')]
-            previous = subprocess.check_output(cmd, text=True).strip()
+            try:
+                previous = subprocess.check_output(cmd, text=True).strip()
+            except subprocess.CalledProcessError as error:
+                print(f'SUBMISSION STOPPED at {point["id"]}, segment={segment + 1}, '
+                      f'qsub exit={error.returncode}. Accepted jobs were not cancelled. '
+                      'Wait for queue capacity, then use --fill-unsubmitted --submit.', flush=True)
+                return False
             with journal.open('a') as stream:
                 stream.write(f'{previous}\t{point["id"]}\t{segment + 1}\t{label}\n')
+            submitted += 1
             print(f'SUBMITTED {point["id"]} segment={segment + 1} -> {previous}', flush=True)
         parents[point['group']] = previous
+    print(f'Accepted {submitted} new job(s) in this invocation.', flush=True)
+    return True
 
 
 def command(config, point, work):
@@ -319,6 +363,10 @@ def main():
     sweep_mode.add_argument('--both-grid', action='store_true', help='40 configurations: Base, 3 KD and 36 Both; no separate Pos/Neg arms.')
     parser.add_argument('--segments', type=int, default=1, help='Finite one-hour resume segments per configuration.')
     parser.add_argument('--epochs', type=int, default=2)
+    parser.add_argument('--fill-unsubmitted', action='store_true',
+                        help='Only points never recorded in jobs.tsv; safe while accepted jobs are active.')
+    parser.add_argument('--max-new-jobs', type=int,
+                        help='Optional cap on new qsub calls for this invocation.')
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument('--submit', action='store_true')
     mode.add_argument('--collect', action='store_true')
@@ -333,21 +381,28 @@ def main():
         return
     if args.segments < 1 or args.epochs < 1:
         parser.error('--segments and --epochs must be positive')
+    if args.max_new_jobs is not None and args.max_new_jobs < 1:
+        parser.error('--max-new-jobs must be positive')
     if not all((args.env_archive, args.hf_cache, args.eh_data, args.vh_data)):
         parser.error('Required: --env-archive --hf-cache --eh-data --vh-data')
     if ',' in str(args.root) or any(c.isspace() for c in str(args.root)):
         parser.error('PBS experiment root must not contain commas or whitespace')
     hashes = preflight(args)
     points = entries(args.sweep, both_only=args.both_grid)
+    accepted = submitted_points(args.root)
     for point in points:
-        print('REUSE' if complete(args.root, point) else 'PENDING', point['id'])
-    pending = sum(not complete(args.root, p) for p in points)
+        state = ('ALREADY_SUBMITTED' if args.fill_unsubmitted and point['id'] in accepted else
+                 'REUSE' if complete(args.root, point) else 'PENDING')
+        print(state, point['id'])
+    pending = sum(not complete(args.root, p) and
+                  not (args.fill_unsubmitted and p['id'] in accepted) for p in points)
     print(f'Model={MODELS[args.model]}; tasks={list(TASKS)}; epochs={args.epochs}; '
           f'configurations={len(points)}; pending={pending}; one-hour jobs={pending * args.segments}')
     if args.submit:
         config = config_for(args, points, hashes, Path(__file__).resolve().parents[1])
         config['manifest_dir'] = str((args.manifest_dir or args.root / 'manifests').resolve())
-        submit(args, config, Path(__file__).resolve().parents[1])
+        if not submit(args, config, Path(__file__).resolve().parents[1]):
+            raise SystemExit(2)
 
 
 if __name__ == '__main__':

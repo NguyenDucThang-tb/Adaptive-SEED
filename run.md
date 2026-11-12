@@ -678,6 +678,26 @@ base evaluation and adapter evaluation are checkpointed. Adapter, optimizer,
 scheduler, RNG, and cursor state remain on GData, not JobFS. A COMPLETE.json
 records final adapter paths, but scheduler success still requires Exit Status 0.
 
+If qsub rejects a partial batch because of the project's queue limit, accepted
+jobs remain valid and are recorded in `jobs.tsv`. Do not cancel other users'
+jobs or duplicate this experiment. Once capacity becomes available, append only
+points never accepted by PBS:
+
+```bash
+python3 scripts/eh_vh_experiment.py "${ARGS[@]}" --fill-unsubmitted
+python3 scripts/eh_vh_experiment.py "${ARGS[@]}" --fill-unsubmitted --submit
+```
+
+This mode can run while the previously accepted workers are active. It never
+resubmits any point already recorded in the journal, even if that point later
+failed. Active predecessor dependencies are preserved within each fixed-AP
+chain, and concurrent launchers are blocked by a submission lock. Optional
+`--max-new-jobs 3` limits new jobs per invocation; it does not bypass queue
+limits. If the queue fills again, the launcher stops without rolling back jobs.
+With multiple segments, a partially accepted point's remaining/resume segments
+are handled by the normal resume command after all active work finishes, not
+by `--fill-unsubmitted`. Normal resume semantics are unchanged.
+
 ## Collect and Select
 
 ```bash
