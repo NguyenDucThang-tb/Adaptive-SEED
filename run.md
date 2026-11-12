@@ -700,6 +700,73 @@ by `--fill-unsubmitted`. Normal resume semantics are unchanged.
 
 ## Collect and Select
 
+### Recover Decord EOF During Evaluation
+
+For **already queued** jobs, changing the submitted `.pbs` file is not enough:
+PBS has spooled it. In this launcher, however, the script starts
+`root/code/scripts/eh_vh_experiment.py` from GData when the worker begins. The
+following optional installation wraps that entrypoint atomically, preserves an
+original copy, and records checksummed override tools separately:
+
+```bash
+module load python3/3.11.7
+ROOT=/g/data/hn98/$USER/projects/adaptive_seed/runs/eh_vh_both40_v1/qwen25
+python3 scripts/queued_eh_vh_decode.py --root "$ROOT"
+python3 scripts/queued_eh_vh_decode.py --root "$ROOT" --apply
+```
+
+No `qdel`, new `qsub`, or `qalter` is performed. Job IDs, requested resources,
+queue membership, and dependency chains are retained (scheduler start order
+is never guaranteed). Python workers that already loaded the original driver
+are unchanged; workers starting afterward force `num_threads=1` for decoding
+during their normal train/evaluate workflow. A PBS job marked R but still
+unpacking its environment may also start with the new entrypoint. No code is
+switched in the middle of an existing Python worker.
+
+The source under `root/code/src` and `experiment.json` stay unchanged, preserving
+existing checkpoint lookup. The entrypoint shim checks source/tool checksums;
+collectors and evaluation-only retries can still import the original driver's
+helpers. Runtime differences are explicit in
+`work/<point>/decoder_override/<PBS_JOBID>.json` and the final completion marker.
+Existing caches are reused; this is not a fresh uniform re-evaluation. Check
+logs for `QUEUED DECODER OVERRIDE` and still require all results and PBS exit 0.
+This workaround is **not yet GPU-verified** and cannot guarantee every clip will
+decode. Do not hand-edit frozen training source or rename adapters/cache hashes.
+
+An EOF decoding failure after training does not require training the adapter
+again. `retry_eh_vh_decode.py` runs the **original frozen source**, overriding
+only the runtime Decord reader to use `num_threads=1`. It keeps frame indices,
+splits, teacher settings, adapter configuration, and weights unchanged. This is
+a workaround to validate on Gadi, not proof that threading caused the EOF.
+
+The tool refuses altered frozen source, missing/mismatched exact adapters, and
+an active job for the same point. It cannot create a new adapter. It reuses
+existing successful prediction checkpoints and baseline caches; this is not a
+fresh full re-evaluation. Every attempt records the recovery script hash,
+decoder setting, training-source identity, and adapter checksum under
+`work/<point>/decoder_recovery/`. `COMPLETE.json` references that audit only after
+all expected method results are present. Report the decoder override when
+using recovered results. No benchmark videos are dropped or replaced.
+
+Run on a login node after pushing/pulling these recovery scripts:
+
+```bash
+module load python3/3.11.7
+ROOT=/g/data/hn98/$USER/projects/adaptive_seed/runs/eh_vh_both40_v1/qwen25
+python3 scripts/retry_eh_vh_decode.py --root "$ROOT" \
+  --point kd_basic_ap0p9_an0p25
+python3 scripts/retry_eh_vh_decode.py --root "$ROOT" \
+  --point kd_basic_ap0p9_an0p25 --submit
+```
+
+This submits **one 90-minute GPU job**, unpacking the existing environment to
+JobFS. The recovery tools are snapshotted separately; `root/code` and
+`experiment.json` are not edited, so other point workers are unaffected. Start
+with one failed point, verify `EVALUATION ONLY`, all expected result rows, and
+`Exit Status: 0`, then retry additional points with saved adapters. Existing
+collectors and `jobs.tsv` continue to work. Do not use `--fill-unsubmitted` to
+retry points already accepted by PBS.
+
 ```bash
 python3 scripts/eh_vh_experiment.py --root "$GROUP/qwen25" --collect
 grep -H -E 'START|COMPLETE|resume checkpoint|BASE EVAL|Traceback|Exit Status|Walltime Used' \
