@@ -51,12 +51,13 @@ def entry(kind, ap, an, group=None):
                 result=f'cdt_distill_cache_f8_448/{stage}/runs/ap{ap:g}_an{an:g}_tf32/results.csv')
 
 
-def entries(sweep):
+def entries(sweep, both_only=False):
     points = [entry(kind, 0.9, 0.25) for kind in ('base', 'kd_basic', 'onpolicy_gkd', 'video_opd')]
-    if not sweep:
+    if not sweep and not both_only:
         return points + [entry(kind, 0.9, 0.25) for kind in ('pos', 'neg', 'both')]
-    points += [entry('pos', v, 0.25) for v in VALUES[1:]]
-    points += [entry('neg', 0.9, v) for v in VALUES[1:]]
+    if not both_only:
+        points += [entry('pos', v, 0.25) for v in VALUES[1:]]
+        points += [entry('neg', 0.9, v) for v in VALUES[1:]]
     points += [entry('both', ap, an, f'both_ap{ap:g}') for ap in VALUES for an in VALUES]
     return points
 
@@ -313,7 +314,9 @@ def main():
     parser.add_argument('--vh-data', type=Path)
     parser.add_argument('--manifest-dir', type=Path,
                         help='Optional shared immutable split manifests across model roots.')
-    parser.add_argument('--sweep', action='store_true', help='50 configurations: Base, 3 KD, 5 Pos, 5 Neg, 36 Both.')
+    sweep_mode = parser.add_mutually_exclusive_group()
+    sweep_mode.add_argument('--sweep', action='store_true', help='50 configurations: Base, 3 KD, 5 Pos, 5 Neg, 36 Both.')
+    sweep_mode.add_argument('--both-grid', action='store_true', help='40 configurations: Base, 3 KD and 36 Both; no separate Pos/Neg arms.')
     parser.add_argument('--segments', type=int, default=1, help='Finite one-hour resume segments per configuration.')
     parser.add_argument('--epochs', type=int, default=2)
     mode = parser.add_mutually_exclusive_group()
@@ -335,7 +338,7 @@ def main():
     if ',' in str(args.root) or any(c.isspace() for c in str(args.root)):
         parser.error('PBS experiment root must not contain commas or whitespace')
     hashes = preflight(args)
-    points = entries(args.sweep)
+    points = entries(args.sweep, both_only=args.both_grid)
     for point in points:
         print('REUSE' if complete(args.root, point) else 'PENDING', point['id'])
     pending = sum(not complete(args.root, p) for p in points)

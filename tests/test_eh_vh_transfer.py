@@ -30,6 +30,18 @@ class TransferTests(unittest.TestCase):
         self.assertEqual(sum(p['kind'] == 'both' for p in points), 36)
         self.assertEqual(len({p['id'] for p in points}), 50)
 
+    def test_both_only_grid_has_exactly_forty_configurations(self):
+        points = driver.entries(False, both_only=True)
+        self.assertEqual(len(points), 40)
+        self.assertEqual(sum(p['kind'] == 'base' for p in points), 1)
+        self.assertEqual(sum(p['kind'] in ('kd_basic', 'onpolicy_gkd', 'video_opd') for p in points), 3)
+        both = [p for p in points if p['kind'] == 'both']
+        self.assertEqual(len(both), 36)
+        self.assertEqual(len({p['group'] for p in both}), 6)
+        self.assertFalse(any(p['kind'] in ('pos', 'neg') for p in points))
+        self.assertEqual({(p['ap'], p['an']) for p in both},
+                         {(ap, an) for ap in driver.VALUES for an in driver.VALUES})
+
     def test_all_methods_use_eh_training_and_common_epochs(self):
         for point in driver.entries(False):
             cmd = driver.command({'epochs': 2}, point, Path('/work'))

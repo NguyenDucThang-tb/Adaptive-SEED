@@ -658,6 +658,13 @@ are serialized with afterany, reusing the exact checkpoint directory; later
 segments exit early if the point already completed. Both configurations are
 grouped into six fixed-AP chains. Failures do not cancel unrelated points.
 
+Use `--both-grid` **instead of** `--sweep` to request only Base + 3 distillation
+methods + 36 Both = 40 configurations. With `--segments 1` this submits 40
+one-hour jobs. This omits the separate adaptive-positive/adaptive-negative
+ablations; coefficient-zero edges of the Both grid do not retroactively make
+those legacy adaptive-flag arms equivalent. Use a new model root if a different
+50-point experiment was already initialized, and do not duplicate active work.
+
 For qwen3/internvl35, change `--model`, `--root` and `--hf-cache`, supplying the
 validated model environment archive. Keep the shared `--manifest-dir` to reject
 EH split or target-task drift across models. Code is snapshotted under each
