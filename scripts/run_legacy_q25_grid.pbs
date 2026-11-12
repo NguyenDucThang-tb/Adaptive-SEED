@@ -1,0 +1,22 @@
+#!/bin/bash
+#PBS -j oe
+set -euo pipefail
+
+module load python3/3.11.7 cuda/12.3.2
+cd "$GRID_ROOT/code"
+ENV_ARCHIVE=$(python3 -c 'import json,os; print(json.load(open(os.environ["GRID_ROOT"]+"/protocol.json"))["env"])')
+export HF_HUB_CACHE
+HF_HUB_CACHE=$(python3 -c 'import json,os; print(json.load(open(os.environ["GRID_ROOT"]+"/protocol.json"))["hf_cache"])')
+export HF_HOME="$HF_HUB_CACHE"
+export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 PYTHONNOUSERSITE=1
+export SEED_MODEL_ID=Qwen/Qwen2.5-VL-7B-Instruct
+export SEED_CHECKPOINT_EVERY_STEPS=1 SEED_EVAL_CHECKPOINT_EVERY=5
+ENV_ROOT="${PBS_JOBFS:?}/env"
+mkdir -p "$ENV_ROOT"
+tar -xzf "$ENV_ARCHIVE" -C "$ENV_ROOT"
+unset PYTHONHOME PYTHONPATH
+"$ENV_ROOT/bin/python" "$ENV_ROOT/bin/conda-unpack"
+export PATH="$ENV_ROOT/bin:$PATH" CONDA_PREFIX="$ENV_ROOT"
+export PYTHONPATH="$PWD/src" PYTHONUNBUFFERED=1
+"$ENV_ROOT/bin/python" -u scripts/submit_legacy_q25_grid.py \
+  --root "$GRID_ROOT" --point "$AP" "$AN"
