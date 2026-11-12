@@ -6,7 +6,6 @@ No frozen source files or training configurations are edited.
 import argparse
 import contextlib
 import csv
-import functools
 import hashlib
 import importlib
 import importlib.util
@@ -66,21 +65,18 @@ def check_inactive(root, ident):
 
 
 @contextlib.contextmanager
-def recovery_hooks(video, trainer, point, audit):
+def recovery_hooks(video, trainer, point, audit, report=lambda: None):
     """Inject decoder settings and forbid falling through to training."""
     old_video_run, old_train = video.run, trainer.train_arm
+    fallback_path = Path(__file__).with_name('decode_eof_fallback.py')
+    spec = importlib.util.spec_from_file_location('retry_eof_fallback', fallback_path)
+    fallback = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fallback)
 
     def video_run(runtime):
         old_video_run(runtime)
-        reader = runtime.VideoReader
-
-        @functools.wraps(reader)
-        def single_thread(*args, **kwargs):
-            kwargs['num_threads'] = 1
-            return reader(*args, **kwargs)
-
-        runtime.VideoReader = single_thread
-        print('DECODER RECOVERY: num_threads=1; frame indices unchanged', flush=True)
+        runtime.VideoReader = fallback.wrap_reader(runtime.VideoReader, audit, report)
+        print('DECODER RECOVERY: num_threads=1 + sequential EOF fallback; frame indices unchanged', flush=True)
 
     def evaluation_only(runtime, name, seed):
         if f'{name}_s{seed}' != point['run']:
@@ -139,6 +135,8 @@ def execute(root, ident):
         )
         audit = dict(point=ident, training_source=config['source'],
                      recovery_script_sha256=sha(__file__), num_threads=1,
+                     eof_fallback='opencv_sequential',
+                     fallback_script_sha256=sha(Path(__file__).with_name('decode_eof_fallback.py')),
                      eof_retry_max=os.environ.get('DECORD_EOF_RETRY_MAX', '10240'),
                      reuse_partial_evaluation=True, training_allowed=False,
                      job=os.environ.get('PBS_JOBID'), state='STARTED')
@@ -148,7 +146,7 @@ def execute(root, ident):
             video = importlib.import_module('seed_video.data.video')
             trainer = importlib.import_module('seed_video.training.trainer')
             cli = importlib.import_module('seed_video.cli')
-            with recovery_hooks(video, trainer, point, audit):
+            with recovery_hooks(video, trainer, point, audit, lambda: driver.atomic_json(audit_path, audit)):
                 cli.main(driver.command(config, point, work)[4:])
             if not audit.get('adapter_verified_unchanged') or not driver.results_ready(work, point):
                 raise RuntimeError('Recovery did not produce all expected method results.')
@@ -171,10 +169,11 @@ def submit(root, ident):
         check_inactive(root, ident)
         script = Path(__file__).resolve()
         pbs = script.with_suffix('.pbs')
-        version = hashlib.sha256(script.read_bytes() + pbs.read_bytes()).hexdigest()[:16]
+        fallback = script.with_name('decode_eof_fallback.py')
+        version = hashlib.sha256(script.read_bytes() + pbs.read_bytes() + fallback.read_bytes()).hexdigest()[:16]
         tools = root / 'recovery_tools' / version
         tools.mkdir(parents=True, exist_ok=True)
-        for path in (script, pbs):
+        for path in (script, pbs, fallback):
             destination = tools / path.name
             if not destination.exists():
                 shutil.copy2(path, destination)

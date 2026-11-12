@@ -77,6 +77,33 @@ def main(): print('ORIGINAL MAIN')
             self.assertEqual(shim.command({}, {}, root)[1:4], ['-u', '-m', 'seed_video'])
             self.assertFalse(shim.complete(root, {}))
 
+    def test_upgrade_old_override_preserves_old_tools_and_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            entry, original, before, manifest = self.install(root)
+            legacy = manifest.parent.with_name('queued_decode_legacy')
+            manifest.parent.rename(legacy)
+            manifest = legacy / 'manifest.json'
+            data = json.loads(manifest.read_text())
+            (legacy / 'queued_eh_vh_decode.py').write_text('# previous single-thread implementation\n')
+            (legacy / 'decode_eof_fallback.py').unlink()
+            data['files'].pop('decode_eof_fallback.py')
+            data['files']['queued_eh_vh_decode.py'] = queued.sha(legacy / 'queued_eh_vh_decode.py')
+            data.pop('eof_fallback', None)
+            manifest.write_text(json.dumps(data))
+            entry.write_text(queued.shim_text(manifest))
+            old_files = {p.name: p.read_bytes() for p in legacy.iterdir()}
+            queued.install(root)
+            self.assertEqual(entry.read_text(), queued.shim_text(manifest))
+            queued.install(root, True)
+            self.assertNotEqual(entry.read_text(), queued.shim_text(manifest))
+            self.assertEqual(queued.source_hash(root), before)
+            self.assertEqual({p.name: p.read_bytes() for p in legacy.iterdir()}, old_files)
+            upgraded = next(p for p in (root / 'recovery_tools').rglob('manifest.json') if p != manifest)
+            new_data = queued.verify(upgraded)
+            self.assertEqual(new_data['eof_fallback'], 'opencv_sequential')
+            self.assertEqual((upgraded.parent / 'original_driver.py').read_bytes(), original)
+
     def test_tampered_original_or_source_is_rejected(self):
         for change in ('original', 'source'):
             with self.subTest(change=change), tempfile.TemporaryDirectory() as directory:

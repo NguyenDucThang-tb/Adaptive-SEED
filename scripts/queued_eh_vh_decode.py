@@ -69,7 +69,7 @@ def verify(manifest):
     root = Path(data['root'])
     if source_hash(root) != data['training_source']:
         raise ValueError('Frozen training source changed; refusing queued override.')
-    for name in ('original_driver.py', 'queued_eh_vh_decode.py'):
+    for name in data['files']:
         if sha(manifest.parent / name) != data['files'][name]:
             raise ValueError(f'Override tool checksum mismatch: {name}')
     return data
@@ -88,9 +88,11 @@ def install(root, apply=False):
     if source_hash(root) != config['source']:
         raise ValueError('Frozen source does not match experiment.json; not patching.')
     entrypoint = root / 'code/scripts/eh_vh_experiment.py'
-    content = entrypoint.read_text()
+    entry_content = entrypoint.read_text()
+    content = entry_content
+    fallback = Path(__file__).with_name('decode_eof_fallback.py')
     if content.startswith(MARKER):
-        # A previous atomic installation is already live. Do not stack shims.
+        # Verify and unwrap the previous installation, never stack shims.
         tree = ast.parse(content)
         assignment = next(node for node in tree.body if isinstance(node, ast.Assign)
                           and any(isinstance(t, ast.Name) and t.id == '_manifest' for t in node.targets))
@@ -98,23 +100,28 @@ def install(root, apply=False):
         data = verify(manifest)
         if Path(data['root']) != root or content != shim_text(manifest):
             raise ValueError('Existing queued override is not the expected shim.')
-        print('ALREADY ENABLED: queued decoder override; no changes made.')
-        return
+        if (data['files']['queued_eh_vh_decode.py'] == sha(__file__)
+                and data['files'].get('decode_eof_fallback.py') == sha(fallback)):
+            print('ALREADY ENABLED: queued decoder override with EOF fallback; no changes made.')
+            return
+        content = (manifest.parent / 'original_driver.py').read_text()
+        print('UPGRADE: preserve previous tools; switch only future worker starts.')
     if 'subprocess.run(command(config, point, work), check=True)' not in content:
         raise ValueError('Unrecognized frozen worker launcher; refusing automatic patch.')
-    print(f'QUEUED PATCH PLAN: {entrypoint}; num_threads=1; no qdel/qsub/qalter')
+    print(f'QUEUED PATCH PLAN: {entrypoint}; num_threads=1 + sequential EOF fallback; no qdel/qsub/qalter')
     if not apply:
         return
     import fcntl
     with (root / '.queued_decode_install.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        if entrypoint.read_text() != content:
+        if entrypoint.read_text() != entry_content:
             raise ValueError('Entrypoint changed while planning; run again.')
-        version = hashlib.sha256(Path(__file__).read_bytes() + content.encode()).hexdigest()[:16]
+        version = hashlib.sha256(Path(__file__).read_bytes() + fallback.read_bytes() + content.encode()).hexdigest()[:16]
         directory = root / 'recovery_tools' / f'queued_decode_{version}'
         directory.mkdir(parents=True, exist_ok=True)
         files = {'original_driver.py': content,
-                 'queued_eh_vh_decode.py': Path(__file__).read_text()}
+                 'queued_eh_vh_decode.py': Path(__file__).read_text(),
+                 'decode_eof_fallback.py': fallback.read_text()}
         for name, text in files.items():
             path = directory / name
             if path.exists() and path.read_text() != text:
@@ -123,10 +130,11 @@ def install(root, apply=False):
         manifest = directory / 'manifest.json'
         atomic_json(manifest, dict(root=str(root), training_source=config['source'],
                                   decoder_num_threads=1, installed_at=time.time(),
+                                  eof_fallback='opencv_sequential',
                                   files={name: sha(directory / name) for name in files}))
         verify(manifest)
         atomic_write(entrypoint, shim_text(manifest))
-        print(f'ENABLED: future worker starts use num_threads=1; manifest={manifest}')
+        print(f'ENABLED: future worker starts use num_threads=1 + sequential EOF fallback; manifest={manifest}')
         print('Already started Python workers are unchanged. Existing job IDs/dependencies remain intact.')
 
 
@@ -174,19 +182,19 @@ def worker(root, ident, manifest, cli_args):
     video = importlib.import_module('seed_video.data.video')
     cli = importlib.import_module('seed_video.cli')
     previous = video.run
+    fallback_spec = importlib.util.spec_from_file_location('queued_eof_fallback', manifest.parent / 'decode_eof_fallback.py')
+    fallback = importlib.util.module_from_spec(fallback_spec)
+    fallback_spec.loader.exec_module(fallback)
 
     def video_run(runtime):
         previous(runtime)
-        reader = runtime.VideoReader
-        def single_thread(*args, **kwargs):
-            kwargs['num_threads'] = 1
-            return reader(*args, **kwargs)
-        runtime.VideoReader = single_thread
-        print('QUEUED DECODER OVERRIDE: num_threads=1; original frame indices and splits', flush=True)
+        runtime.VideoReader = fallback.wrap_reader(runtime.VideoReader, audit, lambda: atomic_json(path, audit))
+        print('QUEUED DECODER OVERRIDE: num_threads=1 + sequential EOF fallback; original frame indices and splits', flush=True)
 
     video.run = video_run
     path = root / 'work' / ident / 'decoder_override' / f'{os.environ.get("PBS_JOBID", "unknown")}.json'
     audit = dict(point=ident, training_source=config['source'], num_threads=1,
+                 eof_fallback='opencv_sequential',
                  override_manifest=str(manifest), training_allowed=True,
                  reuse_existing_caches=True, job=os.environ.get('PBS_JOBID'), state='STARTED')
     atomic_json(path, audit)

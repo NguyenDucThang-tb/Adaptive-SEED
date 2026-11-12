@@ -733,6 +733,32 @@ logs for `QUEUED DECODER OVERRIDE` and still require all results and PBS exit 0.
 This workaround is **not yet GPU-verified** and cannot guarantee every clip will
 decode. Do not hand-edit frozen training source or rename adapters/cache hashes.
 
+Gadi job `183758534` subsequently demonstrated EOF **despite** the single-thread
+override. Therefore threading alone is not a validated fix. The updated tools
+add `decode_eof_fallback.py`: only a Decord EOF exception triggers an OpenCV
+FFmpeg sequential read in a separate process (300-second timeout). It selects
+the exact original zero-based indices, preserves duplicate/order requests,
+converts BGR to RGB, and refuses missing frames rather than padding/skipping.
+The packed environment must include `opencv-python-headless` (already listed
+in requirements). No video files are rewritten. The decoder backend can still
+produce pixel-level differences; report fallback use, not bitwise equivalence
+with the old Base/cached predictions. Each fallback path, indices, backend,
+shape and outcome is recorded in the existing audit JSON.
+
+After pulling the updated tools, rerun the two queued installation commands
+above. An old installation reports `UPGRADE` then `ENABLED` with sequential EOF
+fallback. Previous tool snapshots remain untouched, and only future Python
+worker starts switch to the new version. Pulling alone does not upgrade an
+installed shim. To recover the failed point without retraining:
+
+```bash
+python3 scripts/retry_eh_vh_decode.py --root "$ROOT" \
+  --point both_ap0p5_an0p25 --submit
+```
+
+This fallback is locally tested with synthetic clips, not yet verified on the
+problematic Gadi videos. Still require all expected result rows and PBS exit 0.
+
 An EOF decoding failure after training does not require training the adapter
 again. `retry_eh_vh_decode.py` runs the **original frozen source**, overriding
 only the runtime Decord reader to use `num_threads=1`. It keeps frame indices,

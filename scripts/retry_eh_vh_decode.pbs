@@ -13,6 +13,7 @@ mkdir -p "$ENV_ROOT"
 tar -xzf "$ENV_ARCHIVE" -C "$ENV_ROOT"
 unset PYTHONHOME PYTHONPATH
 "$ENV_ROOT/bin/python" "$ENV_ROOT/bin/conda-unpack"
+"$ENV_ROOT/bin/python" -c 'import cv2; print("EOF fallback OpenCV:", cv2.__version__)'
 export PATH="$ENV_ROOT/bin:$PATH" CONDA_PREFIX="$ENV_ROOT"
 cd "$EXPERIMENT_ROOT/code"
 "$ENV_ROOT/bin/python" -u "$RETRY_SCRIPT" \
