@@ -2,6 +2,14 @@
 from types import MethodType
 
 def mask_path(runtime, v):
+    shared = runtime.os.environ.get('SEED_FOREGROUND_CACHE')
+    if shared and runtime.CFG.get('vh_eval_tasks'):
+        resolved = runtime.os.path.realpath(v)
+        stat = runtime.os.stat(resolved)
+        identity = f'{resolved}|{stat.st_size}|{stat.st_mtime_ns}'
+        folder = f'{shared}/fg_{runtime.MASK_TAG}'
+        runtime.os.makedirs(folder, exist_ok=True)
+        return f'{folder}/{runtime.hashlib.md5(identity.encode()).hexdigest()}.pt'
     return f'{runtime.CACHE}/fg_{runtime.MASK_TAG}/{runtime.hashlib.md5(v.encode()).hexdigest()}.pt'
 
 def fg_soft_grid(runtime, preds, grid, kernel, avg_weight):
@@ -54,7 +62,11 @@ def run(runtime):
     runtime.mask_path = MethodType(mask_path, runtime)
     runtime.fg_soft_grid = MethodType(fg_soft_grid, runtime)
     runtime.temporal_grid_indices = temporal_grid_indices
+    if runtime.CFG.get('vh_eval_tasks') and getattr(runtime.args, 'base_only', False):
+        print('Base-only transfer: skipping foreground masks', flush=True)
+        return
     runtime.todo_m = [v for v in runtime.ALL_VIDEOS if not runtime.os.path.exists(runtime.mask_path(v))]
+    print(f'Foreground: cached={len(runtime.ALL_VIDEOS) - len(runtime.todo_m)}, pending={len(runtime.todo_m)}', flush=True)
     if runtime.todo_m:
         runtime.birefnet = runtime.AutoModelForImageSegmentation.from_pretrained(runtime.CFG['birefnet_id'], trust_remote_code=True).to(runtime.DEV).eval().half()
         runtime.tf_bir = runtime.transforms.Compose([runtime.transforms.Resize((1024, 1024)), runtime.transforms.ToTensor(), runtime.transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])])
@@ -68,9 +80,12 @@ def run(runtime):
                     runtime.p = runtime.p[-1] if isinstance(runtime.p, (list, tuple)) else runtime.p
                     runtime.preds.append(runtime.p.sigmoid().float()[:, 0].cpu())
                 runtime.g = runtime.fg_soft_grid(runtime.torch.cat(runtime.preds), runtime.FG_GRID, runtime.CFG['fg_kernel'], runtime.CFG['fg_avg_weight'])
-                runtime.torch.save(runtime.g.half(), runtime.mask_path(runtime.v))
+                path = runtime.mask_path(runtime.v)
+                temp = f'{path}.tmp.{runtime.os.getpid()}'
+                runtime.torch.save(runtime.g.half(), temp)
+                runtime.os.replace(temp, path)
                 if (runtime.j + 1) % 50 == 0:
-                    print(f'  fg {runtime.j + 1}/{len(runtime.todo_m)} ({(runtime.time.time() - runtime.t0) / 60:.1f} phút)')
+                    print(f'  fg {runtime.j + 1}/{len(runtime.todo_m)} ({(runtime.time.time() - runtime.t0) / 60:.1f} phút)', flush=True)
         del runtime.birefnet
         runtime.gc.collect()
         runtime.torch.cuda.empty_cache()

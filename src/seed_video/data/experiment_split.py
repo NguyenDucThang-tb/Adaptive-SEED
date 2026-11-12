@@ -73,10 +73,16 @@ def configure_eval_splits(runtime):
             short = subset.removeprefix('eh_')
             splits[f'eh_{short}_TEST'] = [item for item in runtime.EH_TEST if item['subset'] == subset]
         if getattr(runtime.args, 'eval_videohallucer', False):
-            if not getattr(runtime, 'VH_VAL', None) or not getattr(runtime, 'VH_TEST', None):
+            full_tasks = getattr(runtime, 'CFG', {}).get('vh_eval_tasks', [])
+            if not getattr(runtime, 'VH_TEST', None) or (not full_tasks and not getattr(runtime, 'VH_VAL', None)):
                 raise ValueError('VideoHallucer evaluation was requested, but VH_VAL/VH_TEST are unavailable.')
-            splits['VH_VAL'] = runtime.VH_VAL
+            if runtime.VH_VAL:
+                splits['VH_VAL'] = runtime.VH_VAL
             splits['VH_TEST'] = runtime.VH_TEST
+            if full_tasks:
+                from seed_video.data.transfer import VH_TASKS
+                for task in full_tasks:
+                    splits[f'VH_{task}_TEST'] = [i for i in runtime.VH_TEST if i['subset'] == VH_TASKS[task]]
         return splits
 
     splits = {'VH_VAL': runtime.VAL, 'VH_TEST': runtime.TEST, 'EH_ALL': runtime.EH}
@@ -98,6 +104,19 @@ def run(runtime):
         seed=args.eh_split_seed,
     )
     smoke_count = getattr(args, 'smoke_pairs', None)
+    if runtime.CFG.get('vh_eval_tasks') and smoke_count is None:
+        from seed_video.data.transfer import content_digest, write_manifest
+        from pathlib import Path
+        portable = dict(version='eh_to_vh_full_v1', seed=args.eh_split_seed,
+                        fractions=[args.eh_train_fraction, args.eh_val_fraction],
+                        digest=content_digest(all_items),
+                        train=sorted(runtime.key(i) for i in train),
+                        val=sorted(runtime.key(i) for i in val),
+                        test=sorted(runtime.key(i) for i in test))
+        write_manifest(runtime.WORK / 'eh_transfer_manifest.json', portable)
+        shared = runtime.os.environ.get('SEED_PROTOCOL_DIR')
+        if shared:
+            write_manifest(Path(shared) / 'eh_transfer_manifest.json', portable)
     if smoke_count is not None:
         train = _take_videos(train, smoke_count)
         val = _take_videos(val, 1)

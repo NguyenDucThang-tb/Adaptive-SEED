@@ -155,6 +155,8 @@ def run(runtime):
     runtime.get_feature_grid = lambda inp: tuple(inp['video_grid_thw'][0].tolist())
     runtime.adapter_off = MethodType(adapter_off, runtime)
     runtime.margin = MethodType(margin, runtime)
+    if runtime.CFG.get('vh_eval_tasks') and getattr(runtime.args, 'base_only', False):
+        return
     runtime.it0 = runtime.TEST[0]
     for runtime.v in ['orig', 'tcd', 'shuf']:
         runtime._, runtime.inp = runtime.fwd_view(runtime.it0, runtime.v, nf=runtime.CFG['teacher_frames'])

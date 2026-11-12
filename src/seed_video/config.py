@@ -49,6 +49,12 @@ def run(runtime):
     runtime.CFG['eval_videohallucer'] = bool(getattr(runtime.args, 'eval_videohallucer', False))
     if runtime.FAST:
         runtime.CFG.update(n_frames=8, tcd_frames=4, epochs=1, grad_ckpt=False, eval_train=True, open_max_new=32)
+    if getattr(runtime.args, 'epochs', None) is not None:
+        runtime.CFG['epochs'] = runtime.args.epochs
+    runtime.CFG['vh_eval_tasks'] = list(dict.fromkeys(getattr(runtime.args, 'vh_eval_tasks', None) or []))
+    if runtime.CFG['vh_eval_tasks']:
+        from seed_video.data.transfer import VH_TASKS
+        runtime.CFG['subsets'] = [VH_TASKS[t] for t in runtime.CFG['vh_eval_tasks']]
     smoke_pairs = getattr(runtime.args, 'smoke_pairs', None)
     if runtime.CFG['train_dataset'] == 'eventhallusion':
         train_fraction = runtime.args.eh_train_fraction

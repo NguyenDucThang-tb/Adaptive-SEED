@@ -1,0 +1,19 @@
+#!/bin/bash
+#PBS -P hn98
+#PBS -q copyq
+#PBS -N ehvh_data
+#PBS -l ncpus=1,mem=16GB,jobfs=40GB,walltime=02:00:00
+#PBS -l storage=scratch/hn98+gdata/hn98
+#PBS -l wd
+#PBS -j oe
+set -euo pipefail
+module load python3/3.11.7
+ARCHIVE="${ENV_ARCHIVE:-/g/data/hn98/$USER/envs/adaptive_seed_qwen25_20261108T023033.tar.gz}"
+DEST="${VH_DEST:-/g/data/hn98/$USER/datasets/VideoHallucer_full_transfer_v1}"
+ENV_ROOT="${PBS_JOBFS:?}/env"
+mkdir -p "$ENV_ROOT"
+tar -xzf "$ARCHIVE" -C "$ENV_ROOT"
+unset PYTHONHOME PYTHONPATH HF_HUB_OFFLINE TRANSFORMERS_OFFLINE
+export PYTHONNOUSERSITE=1 PYTHONUNBUFFERED=1
+"$ENV_ROOT/bin/python" "$ENV_ROOT/bin/conda-unpack"
+"$ENV_ROOT/bin/python" scripts/download_transfer_vh.py --destination "$DEST"

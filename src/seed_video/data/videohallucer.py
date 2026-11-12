@@ -5,7 +5,9 @@ def load_videohallucer(runtime, subsets):
     items, n_raw = ([], 0)
     for sub in subsets:
         seen = set()
-        for jp in sorted(runtime.glob.glob(f'{runtime.ROOT}/{sub}/*.json')):
+        paths = ([f'{runtime.ROOT}/{sub}/{sub}.json'] if runtime.CFG.get('vh_eval_tasks')
+                 else sorted(runtime.glob.glob(f'{runtime.ROOT}/{sub}/*.json')))
+        for jp in paths:
             for ex in runtime.json.load(open(jp)):
                 n_raw += 1
                 b, h = (ex['basic'], ex['hallucination'])
@@ -14,6 +16,8 @@ def load_videohallucer(runtime, subsets):
                     continue
                 seen.add(sig)
                 if any(((sub, runtime.os.path.basename(q['video'])) not in runtime.VIDEO_INDEX for q in (b, h))):
+                    if runtime.CFG.get('vh_eval_tasks'):
+                        raise ValueError(f'Missing VH video in {sub}: {b["video"]}, {h["video"]}')
                     continue
                 pid = f'{sub}/{len(seen) - 1}'
                 for role, q in (('basic', b), ('hallucination', h)):
@@ -40,7 +44,8 @@ def take(runtime, cands, n, banned):
 def _local_repo_files(runtime):
     files = []
     for sub in runtime.CFG['subsets']:
-        for dirpath, _, names in runtime.os.walk(f'{runtime.ROOT}/{sub}'):
+        for dirpath, _, names in runtime.os.walk(f'{runtime.ROOT}/{sub}',
+                                                followlinks=bool(runtime.CFG.get('vh_eval_tasks'))):
             for n in names:
                 files.append(runtime.os.path.relpath(runtime.os.path.join(dirpath, n), runtime.ROOT).replace('\\', '/'))
     return files
@@ -68,6 +73,10 @@ def run(runtime):
     runtime.snapshot_download = snapshot_download
     runtime.ROOT = runtime.CFG['data_root']
     runtime.os.makedirs(runtime.ROOT, exist_ok=True)
+    if runtime.CFG.get('vh_eval_tasks'):
+        for sub in runtime.CFG['subsets']:
+            if not runtime.os.path.isfile(f'{runtime.ROOT}/{sub}/{sub}.json'):
+                raise ValueError(f'Missing full transfer annotations: {runtime.ROOT}/{sub}/{sub}.json')
     runtime.OFFLINE = runtime.os.environ.get('HF_HUB_OFFLINE') == '1'
     if runtime.OFFLINE:
         runtime.REPO_FILES = _local_repo_files(runtime)
@@ -82,6 +91,10 @@ def run(runtime):
     runtime.load_videohallucer = MethodType(load_videohallucer, runtime)
     runtime.key = MethodType(key, runtime)
     runtime.ITEMS = runtime.load_videohallucer(runtime.CFG['subsets'])
+    if runtime.CFG.get('vh_eval_tasks'):
+        from seed_video.data.transfer import full_vh_evaluation
+        full_vh_evaluation(runtime)
+        return
     runtime.pairs = {}
     for runtime.it in runtime.ITEMS:
         runtime.pairs.setdefault(runtime.it['pair_id'], []).append(runtime.it)

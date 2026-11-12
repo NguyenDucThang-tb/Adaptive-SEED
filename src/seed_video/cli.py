@@ -17,6 +17,10 @@ def main(argv=None):
                         help="Dataset used for the train/validation/test split.")
     parser.add_argument("--eval-videohallucer", action="store_true",
                         help="When training on EventHallusion, also evaluate the checkpoint on VideoHallucer val/test.")
+    parser.add_argument('--vh-eval-tasks', nargs='+', choices=['ORH', 'TPH', 'SDH', 'EFH', 'ENFH'],
+                        help='Full target-only VH tasks; requires EH training and --eval-videohallucer.')
+    parser.add_argument('--epochs', type=int, default=None,
+                        help='Explicit common training budget; omitted preserves legacy method defaults.')
     parser.add_argument("--eh-train-fraction", type=float, default=0.7)
     parser.add_argument("--eh-val-fraction", type=float, default=0.1)
     parser.add_argument("--eh-split-seed", type=int, default=42)
@@ -43,6 +47,10 @@ def main(argv=None):
                         help="Only train these ablation arms (stage components); default all 8")
     parser.add_argument("--dry-run", action="store_true", help="Print stages without data downloads or GPU access")
     args = parser.parse_args(argv)
+    if args.vh_eval_tasks and (args.train_dataset != 'eventhallusion' or not args.eval_videohallucer):
+        parser.error('--vh-eval-tasks requires --train-dataset eventhallusion --eval-videohallucer')
+    if args.epochs is not None and args.epochs < 1:
+        parser.error('--epochs must be positive')
     if args.dry_run:
         print("\n".join(plan(args.stage)))
         return

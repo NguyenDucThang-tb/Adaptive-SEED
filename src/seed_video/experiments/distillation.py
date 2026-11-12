@@ -66,6 +66,18 @@ def run_base_only(runtime):
         ],
     }
     path = runtime.RES / f"base_only_{runtime.cfg_hash(meta)}.pt"
+    if runtime.CFG.get('vh_eval_tasks'):
+        from seed_video.evaluation.inference import eval_base_cached
+        marg = eval_base_cached(runtime, items, path)
+        runtime.MARG = {'base': marg}
+        runtime.ROWS = runtime.result_rows('base', marg)
+        runtime.save_distillation_results()
+        runtime.pd.DataFrame([dict(id=runtime.key(i), video=i['video'], question=i['question'],
+                                  answer=i['answer'], base_margin=marg[runtime.key(i)],
+                                  student_margin=marg[runtime.key(i)]) for i in items]).to_csv(
+                                      runtime.RES / 'base_predictions.csv', index=False)
+        print('Saved Base-only transfer results:', runtime.RES / 'results.csv', flush=True)
+        return
     state = None
     if path.exists():
         state = runtime.torch.load(path, map_location="cpu", weights_only=False)
@@ -105,7 +117,7 @@ def run(runtime, methods):
     runtime.METHODS.update(method_registry(runtime, methods))
 
     tag = f"ap{runtime.CFG['a_pos']:g}_an{runtime.CFG['a_tcd']:g}_tf{runtime.CFG['teacher_frames']}"
-    runtime.CFG["epochs"] = 2
+    runtime.CFG["epochs"] = getattr(runtime.args, 'epochs', None) or 2
     runtime.OUT = runtime.Path(runtime.CACHE) / "distillation_methods"
     runtime.RES = runtime.OUT / "runs" / tag
     runtime.STUDENT_DIR = str(runtime.RES / "students")
@@ -129,8 +141,11 @@ def run(runtime, methods):
     if base_path.exists():
         runtime.MARG["base"] = runtime.torch.load(base_path, weights_only=False)
     else:
-        runtime.MARG["base"] = runtime.eval_items(runtime.eval_set())
-        runtime.torch.save(runtime.MARG["base"], base_path)
+        from seed_video.evaluation.inference import eval_base_cached
+        runtime.MARG['base'] = eval_base_cached(runtime, runtime.eval_set(), base_path)
+        temp = str(base_path) + f'.tmp.{runtime.os.getpid()}'
+        runtime.torch.save(runtime.MARG['base'], temp)
+        runtime.os.replace(temp, base_path)
 
     runtime.ROWS = runtime.result_rows("base", runtime.MARG["base"])
     runtime.save_distillation_results()

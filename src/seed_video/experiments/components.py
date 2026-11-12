@@ -63,7 +63,11 @@ def prepare_shared(runtime):
     for it in runtime.tqdm(runtime.TRAIN, desc='Shared teacher views TRAIN'):
         k = runtime.key(it)
         meta = dict(abl=runtime.ABL, source=runtime.SOURCE_HASH, item=runtime.item_sig(it), branches={b: runtime.branch_cfg(b) for b in ['orig', 'orig+fg', 'tcd']})
-        path = runtime.OUT / ('views_' + runtime.cfg_hash(meta) + '.pt')
+        shared_dir = runtime.OUT
+        if runtime.CFG.get('vh_eval_tasks') and runtime.os.environ.get('SEED_TEACHER_CACHE_DIR'):
+            shared_dir = runtime.Path(runtime.os.environ['SEED_TEACHER_CACHE_DIR'])
+            shared_dir.mkdir(parents=True, exist_ok=True)
+        path = shared_dir / ('views_' + runtime.cfg_hash(meta) + '.pt')
         if path.exists():
             obj = runtime.torch.load(path, map_location='cpu', weights_only=False)
             assert obj['meta'] == meta
@@ -92,8 +96,9 @@ def prepare_shared(runtime):
             else:
                 rec['pair'][selected] = (1.0, float('nan'), float('nan'))
         rec['pair_eligible'] = eligible
-        runtime.torch.save(dict(meta=meta, data=rec), str(path) + '.tmp')
-        runtime.os.replace(str(path) + '.tmp', path)
+        temp = str(path) + f'.tmp.{runtime.os.getpid()}'
+        runtime.torch.save(dict(meta=meta, data=rec), temp)
+        runtime.os.replace(temp, path)
         shared[k] = rec
     return shared
 
@@ -183,6 +188,9 @@ def run(runtime):
     print('Original SEED CE probability:', runtime.CFG['seed_gamma'])
     runtime.file_sha = MethodType(file_sha, runtime)
     runtime.VIDEO_SHA = {p: runtime.file_sha(p) for p in signature_videos(runtime)}
+    if runtime.CFG.get('vh_eval_tasks'):
+        from seed_video.data.transfer import check_video_overlap
+        check_video_overlap(runtime)
     runtime.item_sig = MethodType(item_sig, runtime)
     runtime._original_feature = runtime.feature_enhance
     runtime.TOKEN_SELECTED = False
@@ -247,8 +255,11 @@ def run(runtime):
     if runtime.base_path.exists():
         runtime.MARG['base'] = runtime.torch.load(runtime.base_path, weights_only=False)
     else:
-        runtime.MARG['base'] = runtime.eval_items(runtime.eval_set())
-        runtime.torch.save(runtime.MARG['base'], runtime.base_path)
+        from seed_video.evaluation.inference import eval_base_cached
+        runtime.MARG['base'] = eval_base_cached(runtime, runtime.eval_set(), runtime.base_path)
+        temp = str(runtime.base_path) + f'.tmp.{runtime.os.getpid()}'
+        runtime.torch.save(runtime.MARG['base'], temp)
+        runtime.os.replace(temp, runtime.base_path)
     runtime.SPLITS = runtime.configure_eval_splits()
     runtime.result_rows = MethodType(result_rows, runtime)
     runtime.save_results = MethodType(save_results, runtime)

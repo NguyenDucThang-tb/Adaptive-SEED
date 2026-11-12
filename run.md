@@ -561,3 +561,128 @@ python scripts/collect_exp1.py --work "$Q3_WORK" --both-pairs "${GRID_PAIRS[@]}"
 ```
 
 Chỉ sau khi chọn cấu hình theo validation, lấy hàng `VH_TEST` và `EH_TEST` cho đúng cặp đó để báo cáo held-out performance. So sánh `adaptive_pos_neg_s0` với `seed_base_s0` trong cùng điểm để kiểm tra kỳ vọng `Acc(our method) >= Acc(Base)`.
+# EH -> VideoHallucer: Full Five-Task Transfer (V2)
+
+This protocol is separate from legacy VH-trained sweeps and the older EH ->
+310-question VH holdout. It trains only on EH train, uses EH validation for
+configuration selection, and evaluates all available resolved pairs of ORH,
+TPH, SDH, EFH and ENFH. The official layout is documented at
+https://github.com/patrick-tssn/VideoHallucer . Counts come from the local pinned
+annotations after exact-pair deduplication, not an assumed 400 records per task.
+
+All methods use the same explicit epoch budget (default 2), student 8 frames,
+teacher 32 frames, EH video-disjoint 70/10/20 split with seed 42. There is no
+VH training or target-validation tuning. Original Base is evaluated anew on
+exactly the same full VH tasks and held-out EH items as each adapter.
+Training rejects exact-byte video overlap (SHA256) between EH train and EH/VH
+evaluation without silently dropping or resampling records. This does not detect
+partially overlapping video segments or differently encoded copies.
+Only Pos/Neg mean adaptive flags; the other teacher coefficient remains fixed
+(AN=0.25 for Pos, AP=0.9 for Neg), as in the legacy ablation.
+
+## Data Preparation on Copyq
+
+Do not overwrite datasets or environments used by running legacy jobs. If the
+existing VH directory only contains temporal/object_relation, download all five
+tasks into a separate directory. From a login node:
+
+```bash
+cd /scratch/hn98/$USER/Adaptive-SEED
+qsub scripts/prepare_eh_vh_data.pbs
+```
+
+Wait for this data job to exit successfully before experiment preflight/submit.
+The same preparation can be performed interactively instead:
+
+```bash
+qsub -I -P hn98 -q copyq \
+  -l ncpus=1,mem=16GB,jobfs=40GB,walltime=02:00:00 \
+  -l storage=scratch/hn98+gdata/hn98
+```
+
+Inside that job (environment extraction is temporary in JobFS):
+
+```bash
+CODE=/scratch/hn98/$USER/Adaptive-SEED
+ARCHIVE=/g/data/hn98/$USER/envs/adaptive_seed_qwen25_20261108T023033.tar.gz
+ENV_ROOT="$PBS_JOBFS/env"
+module load python3/3.11.7
+mkdir -p "$ENV_ROOT"
+tar -xzf "$ARCHIVE" -C "$ENV_ROOT"
+unset PYTHONHOME PYTHONPATH HF_HUB_OFFLINE TRANSFORMERS_OFFLINE
+export PYTHONNOUSERSITE=1
+"$ENV_ROOT/bin/python" "$ENV_ROOT/bin/conda-unpack"
+"$ENV_ROOT/bin/python" "$CODE/scripts/download_transfer_vh.py" \
+  --destination /g/data/hn98/$USER/datasets/VideoHallucer_full_transfer_v1
+```
+
+Rerunning the download command resumes the pinned download. Its marker records
+the requested source, not successful completion; experiment preflight checks all
+five annotation files, all referenced VH videos, EH folders, model shards, and
+the environment archive. Local annotation SHA256 values are recorded because
+an offline directory alone does not prove the configured HF revision.
+
+## Plan and Submit
+
+Run from a login node, not inside another GPU allocation. Use an environment
+archive smoke-tested for the selected model; no unpacked conda env is retained
+on GData. Supported models: qwen25, qwen3, internvl35. HF caches are respectively
+`/g/data/hn98/$USER/models/hf_cache_qwen25`,
+`/g/data/hn98/$USER/models/hf_cache_qwen3/hub`, and
+`/g/data/hn98/$USER/models/hf_cache_internvl35/hub`.
+
+```bash
+cd /scratch/hn98/$USER/Adaptive-SEED
+module load python3/3.11.7
+GROUP=/g/data/hn98/$USER/projects/adaptive_seed/runs/eh_vh_full_v2
+ARGS=(
+  --root "$GROUP/qwen25" --model qwen25
+  --manifest-dir "$GROUP/manifests"
+  --env-archive /g/data/hn98/$USER/envs/adaptive_seed_qwen25_20261108T023033.tar.gz
+  --hf-cache /g/data/hn98/$USER/models/hf_cache_qwen25
+  --eh-data /g/data/hn98/$USER/datasets/EventHallusion
+  --vh-data /g/data/hn98/$USER/datasets/VideoHallucer_full_transfer_v1
+  --epochs 2 --segments 3 --sweep
+)
+python3 scripts/eh_vh_experiment.py "${ARGS[@]}"
+# Only submit after the preflight/plan succeeds and the job count is acceptable.
+python3 scripts/eh_vh_experiment.py "${ARGS[@]}" --submit
+```
+
+Without `--sweep`: 7 configurations (Base, three distillation methods, three
+adaptive arms at AP=0.9/AN=0.25). With `--sweep`: 50 configurations per model
+(Base + 3 KD + 5 Pos + 5 Neg + 36 Both). Three segments means **150 one-hour PBS
+jobs per model**, not 50 jobs. These are finite continuation segments, not array
+shards and not guaranteed to finish in three hours. Segments of the same point
+are serialized with afterany, reusing the exact checkpoint directory; later
+segments exit early if the point already completed. Both configurations are
+grouped into six fixed-AP chains. Failures do not cancel unrelated points.
+
+For qwen3/internvl35, change `--model`, `--root` and `--hf-cache`, supplying the
+validated model environment archive. Keep the shared `--manifest-dir` to reject
+EH split or target-task drift across models. Code is snapshotted under each
+model root and data/env/source changes are rejected on resume. There is no
+reuse of VH-trained legacy checkpoints in this protocol.
+
+If work is incomplete after all segments end, rerun the same plan/submit
+commands with the **same root**. Active workers block duplicate submission.
+Foreground masks and teacher caches are shared only within this model root;
+base evaluation and adapter evaluation are checkpointed. Adapter, optimizer,
+scheduler, RNG, and cursor state remain on GData, not JobFS. A COMPLETE.json
+records final adapter paths, but scheduler success still requires Exit Status 0.
+
+## Collect and Select
+
+```bash
+python3 scripts/eh_vh_experiment.py --root "$GROUP/qwen25" --collect
+grep -H -E 'START|COMPLETE|resume checkpoint|BASE EVAL|Traceback|Exit Status|Walltime Used' \
+  "$GROUP/qwen25/logs/"*.out
+```
+
+`all_results.csv` includes per-task pair/Q accuracy, n/n_pairs, main-Base deltas,
+W2C/C2W, TP/TN/FP/FN, class recalls and balanced accuracy. Single-class EH
+subsets have undefined balanced accuracy (NaN), not an invented score.
+`selected_by_eh_val.csv` selects final trained configurations using EH_VAL
+Q accuracy only, with deterministic smaller-coefficient ties. Selection is
+provisional (`selection_complete=False`) until that method's planned sweep
+finishes. VH_TEST is never used to select a checkpoint/configuration.

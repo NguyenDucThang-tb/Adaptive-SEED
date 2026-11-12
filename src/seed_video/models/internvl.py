@@ -185,6 +185,9 @@ def run(runtime):
     runtime.adapter_off = MethodType(adapter_off, runtime)
     runtime.margin = MethodType(margin, runtime)
 
+    if runtime.CFG.get('vh_eval_tasks') and getattr(runtime.args, 'base_only', False):
+        return
+
     runtime.it0 = runtime.TEST[0]
     for runtime.view in ("orig", "tcd", "shuf"):
         runtime.out, runtime.inp = runtime.fwd_view(runtime.it0, runtime.view, nf=runtime.CFG["teacher_frames"])
