@@ -12,7 +12,7 @@ def main(argv=None):
     parser.add_argument("--work-dir", type=Path, default=Path("runs/seed_full"))
     parser.add_argument("--stage", choices=["core", "no-caption", "full", "all"], default="all")
     parser.add_argument("--no-eh", action="store_true")
-    parser.add_argument("--train-dataset", choices=["videohallucer", "eventhallusion"],
+    parser.add_argument("--train-dataset", choices=["videohallucer", "eventhallusion", "mixed"],
                         default="videohallucer",
                         help="Dataset used for the train/validation/test split.")
     parser.add_argument("--eval-videohallucer", action="store_true",
@@ -21,6 +21,8 @@ def main(argv=None):
                         help='Full target-only VH tasks; requires EH training and --eval-videohallucer.')
     parser.add_argument('--epochs', type=int, default=None,
                         help='Explicit common training budget; omitted preserves legacy method defaults.')
+    parser.add_argument('--max-train-steps', type=int, default=None,
+                        help='Positive optimizer-step cap per adapter, accumulated across epochs and resumes.')
     parser.add_argument("--eh-train-fraction", type=float, default=0.7)
     parser.add_argument("--eh-val-fraction", type=float, default=0.1)
     parser.add_argument("--eh-split-seed", type=int, default=42)
@@ -51,6 +53,10 @@ def main(argv=None):
         parser.error('--vh-eval-tasks requires --train-dataset eventhallusion --eval-videohallucer')
     if args.epochs is not None and args.epochs < 1:
         parser.error('--epochs must be positive')
+    if args.max_train_steps is not None and args.max_train_steps < 1:
+        parser.error('--max-train-steps must be positive')
+    if args.train_dataset == 'mixed' and args.no_eh:
+        parser.error('--no-eh cannot be used with --train-dataset mixed')
     if args.dry_run:
         print("\n".join(plan(args.stage)))
         return

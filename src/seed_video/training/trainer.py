@@ -13,6 +13,17 @@ def _atomic_torch_save(runtime, value, path):
             runtime.os.unlink(temp)
 
 
+def _atomic_json_save(runtime, value, path):
+    temp = f'{path}.tmp.{runtime.os.getpid()}'
+    try:
+        with open(temp, 'w', encoding='utf-8') as handle:
+            runtime.json.dump(value, handle, indent=1, default=str)
+        runtime.os.replace(temp, path)
+    finally:
+        if runtime.os.path.exists(temp):
+            runtime.os.unlink(temp)
+
+
 def _training_rng_state(runtime, rng):
     return dict(
         python=runtime.random.getstate(),
@@ -62,6 +73,9 @@ def _unwrap(runtime):
 def student_cfg(runtime, name, seed):
     T = runtime.METHODS[name][1]
     d = dict(code=runtime.CODE_VERSION, name=name, seed=seed, lora_targets=runtime.LORA_TARGETS, hp={k: runtime.CFG[k] for k in runtime.STUDENT_HP}, train=[runtime.key(i) for i in runtime.TRAIN])
+    if runtime.CFG.get('max_train_steps') is not None:
+        d['hp']['max_train_steps'] = runtime.CFG['max_train_steps']
+        d['hp']['train_dataset'] = runtime.CFG['train_dataset']
     if T is not None:
         spec = runtime.TEACHERS[T]
         d['teacher'] = dict(name=T, spec=spec, branches={v: runtime.branch_cfg(v) for v in runtime.views_of(spec)})
@@ -72,8 +86,12 @@ def arm_paths(runtime, name, seed):
     return (stem + '.pt', stem + '_adapter.pt', stem + '.json')
 
 def train_arm(runtime, name, seed):
+    max_train_steps = runtime.CFG.get('max_train_steps')
+    if max_train_steps is not None and max_train_steps < 1:
+        raise ValueError('max_train_steps must be positive')
     tag = f'{name}_s{seed}'
     path, apath, jpath = runtime.arm_paths(name, seed)
+    budget_path = runtime.os.path.splitext(jpath)[0] + '_training_budget.json'
     ev = runtime.eval_set()
     cfg = runtime.student_cfg(name, seed)
     train_checkpoint_path = path + '.train_checkpoint.pt'
@@ -114,10 +132,22 @@ def train_arm(runtime, name, seed):
             params = [p for p in runtime.model.parameters() if p.requires_grad]
             opt = runtime.torch.optim.AdamW(params, lr=runtime.CFG['lr'], weight_decay=0.0)
             total = runtime.CFG['epochs'] * len(runtime.TRAIN)
+            schedule_steps = runtime.math.ceil(total / runtime.CFG['grad_accum'])
+            warmup_steps = int(0.05 * total / runtime.CFG['grad_accum'])
+            if max_train_steps is not None:
+                available_steps = runtime.CFG['epochs'] * runtime.math.ceil(
+                    len(runtime.TRAIN) / runtime.CFG['grad_accum'])
+                if available_steps < max_train_steps:
+                    raise ValueError(
+                        f'Cannot meet max_train_steps={max_train_steps}: epochs permit at most '
+                        f'{available_steps} optimizer steps; increase --epochs.'
+                    )
+                schedule_steps = max_train_steps
+                warmup_steps = int(0.05 * schedule_steps)
             sched = runtime.get_cosine_schedule_with_warmup(
                 opt,
-                int(0.05 * total / runtime.CFG['grad_accum']),
-                runtime.math.ceil(total / runtime.CFG['grad_accum']),
+                warmup_steps,
+                schedule_steps,
             )
             rng = runtime.random.Random(seed)
             epoch, next_index, order_keys, g, opt_steps = 0, 0, None, 0, 0
@@ -148,7 +178,7 @@ def train_arm(runtime, name, seed):
 
             item_by_key = {runtime.key(item): item for item in runtime.TRAIN}
             started = runtime.time.time()
-            while epoch < runtime.CFG['epochs']:
+            while epoch < runtime.CFG['epochs'] and (max_train_steps is None or opt_steps < max_train_steps):
                 if order_keys is None:
                     order = select(runtime.TRAIN[:], epoch)
                     rng.shuffle(order)
@@ -198,6 +228,8 @@ def train_arm(runtime, name, seed):
                                 rng=_training_rng_state(runtime, rng),
                                 method_state=runtime.capture_method_state() if hasattr(runtime, 'capture_method_state') else None,
                             ), train_checkpoint_path)
+                        if max_train_steps is not None and opt_steps >= max_train_steps:
+                            break
 
                 epoch_rows = _epoch_log_rows(log, epoch)
                 d = runtime.pd.DataFrame(epoch_rows).drop(columns='ep').mean().round(5).to_dict() if epoch_rows else {}
@@ -220,22 +252,34 @@ def train_arm(runtime, name, seed):
                     method_state=runtime.capture_method_state() if hasattr(runtime, 'capture_method_state') else None,
                 ), train_checkpoint_path)
 
+            if max_train_steps is not None and opt_steps != max_train_steps:
+                raise RuntimeError(
+                    f'Optimizer budget unmet: completed {opt_steps}/{max_train_steps} steps; '
+                    'increase --epochs or check filtered/skipped training losses.'
+                )
             train_min += (runtime.time.time() - started) / 60
+            if max_train_steps is not None:
+                _atomic_json_save(runtime, dict(
+                    max_train_steps=max_train_steps, optimizer_steps_completed=opt_steps,
+                    cfg_hash=runtime.cfg_hash(cfg),
+                ), budget_path)
             _atomic_torch_save(runtime, {
                 k: v.detach().cpu()
                 for k, v in runtime.get_peft_model_state_dict(runtime.model).items()
             }, apath)
-            temp_json = f'{jpath}.tmp.{runtime.os.getpid()}'
-            try:
-                with open(temp_json, 'w', encoding='utf-8') as handle:
-                    runtime.json.dump(cfg, handle, indent=1, default=str)
-                runtime.os.replace(temp_json, jpath)
-            finally:
-                if runtime.os.path.exists(temp_json):
-                    runtime.os.unlink(temp_json)
+            _atomic_json_save(runtime, cfg, jpath)
             if runtime.os.path.exists(train_checkpoint_path):
                 runtime.os.unlink(train_checkpoint_path)
         else:
+            if max_train_steps is not None:
+                if not runtime.os.path.exists(budget_path):
+                    raise RuntimeError(f'Missing optimizer budget marker: {budget_path}')
+                with open(budget_path, encoding='utf-8') as handle:
+                    budget = runtime.json.load(handle)
+                if budget != dict(max_train_steps=max_train_steps,
+                                  optimizer_steps_completed=max_train_steps,
+                                  cfg_hash=runtime.cfg_hash(cfg)):
+                    raise RuntimeError(f'Optimizer budget marker mismatch: {budget_path}')
             runtime.set_peft_model_state_dict(
                 runtime.model, runtime.torch.load(apath, map_location='cpu', weights_only=False)
             )
@@ -257,6 +301,8 @@ def train_arm(runtime, name, seed):
             train_min=train_min,
             sec_per_q=(runtime.time.time() - eval_started) / max(1, len(miss)),
         )
+        if max_train_steps is not None:
+            out['optimizer_steps_completed'] = max_train_steps
         _atomic_torch_save(runtime, out, path)
         if runtime.os.path.exists(eval_checkpoint_path):
             runtime.os.unlink(eval_checkpoint_path)
@@ -278,6 +324,8 @@ def run(runtime):
     runtime._unwrap = MethodType(_unwrap, runtime)
     runtime.eval_items = MethodType(eval_items, runtime)
     runtime.STUDENT_HP = ['model_id', 'n_frames', 'frame_size', 'lora_r', 'lora_alpha', 'lora_dropout', 'lr', 'epochs', 'grad_accum', 'hinton_T', 'p_open', 'open_prompt', 'open_max_new', 'yn_max_new', 'gen_temp', 'jsd_beta', 'tvdf_keep', 'tvdf_use_gt', 'seed_groups', 'seed_betas', 'seed_gamma', 'plaus_beta', 'seq_plaus', 'opsd_anchor']
+    if runtime.CFG.get('max_train_steps') is not None:
+        runtime.STUDENT_HP.append('max_train_steps')
     runtime.student_cfg = MethodType(student_cfg, runtime)
     runtime.STUDENT_DIR = f'{runtime.CACHE}/students'
     runtime.os.makedirs(runtime.STUDENT_DIR, exist_ok=True)

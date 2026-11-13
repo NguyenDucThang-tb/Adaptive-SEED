@@ -27,7 +27,10 @@ def load_videohallucer(runtime, subsets):
     return items
 
 def key(runtime, it):
-    return f"{it['pair_id']}|{it['role']}"
+    legacy = f"{it['pair_id']}|{it['role']}"
+    if getattr(getattr(runtime, 'args', None), 'train_dataset', 'videohallucer') == 'mixed':
+        return f"{it['source']}:{it['subset']}:{legacy}"
+    return legacy
 
 def take(runtime, cands, n, banned):
     ids, vids = ([], set())
@@ -35,6 +38,8 @@ def take(runtime, cands, n, banned):
         if len(ids) >= n:
             break
         v = {i['video'] for i in runtime.pairs[pid]}
+        if getattr(runtime.args, 'train_dataset', 'videohallucer') == 'mixed':
+            v = {runtime.os.path.realpath(path) for path in v}
         if v & banned:
             continue
         ids.append(pid)
@@ -91,6 +96,9 @@ def run(runtime):
     runtime.load_videohallucer = MethodType(load_videohallucer, runtime)
     runtime.key = MethodType(key, runtime)
     runtime.ITEMS = runtime.load_videohallucer(runtime.CFG['subsets'])
+    if train_dataset == 'mixed':
+        for item in runtime.ITEMS:
+            item['source'] = 'VH'
     if runtime.CFG.get('vh_eval_tasks'):
         from seed_video.data.transfer import full_vh_evaluation
         full_vh_evaluation(runtime)

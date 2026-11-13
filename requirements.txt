@@ -11,6 +11,7 @@ einops
 scipy
 numpy
 pandas
+pyarrow
 Pillow
 gdown
 opencv-python-headless

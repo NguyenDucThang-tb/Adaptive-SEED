@@ -185,7 +185,7 @@ def run(runtime):
     runtime.adapter_off = MethodType(adapter_off, runtime)
     runtime.margin = MethodType(margin, runtime)
 
-    if runtime.CFG.get('vh_eval_tasks') and getattr(runtime.args, 'base_only', False):
+    if runtime.CFG.get('evaluation_only') or (runtime.CFG.get('vh_eval_tasks') and getattr(runtime.args, 'base_only', False)):
         return
 
     runtime.it0 = runtime.TEST[0]

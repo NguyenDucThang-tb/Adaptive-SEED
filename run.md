@@ -806,3 +806,156 @@ subsets have undefined balanced accuracy (NaN), not an invented score.
 Q accuracy only, with deterministic smaller-coefficient ties. Selection is
 provisional (`selection_complete=False`) until that method's planned sweep
 finishes. VH_TEST is never used to select a checkpoint/configuration.
+
+## Experiment2: Source Training -> VideoMME Retention
+
+This is a separate fixed-budget experiment, not the EH -> VH launcher above.
+For each model (`qwen25`, `qwen3`, `internvl35`), the default plan has seven
+90-minute GPU jobs: one independent Base VideoMME evaluation, and three source
+training jobs, each followed by its own `afterok` VideoMME evaluation. Adapted
+evaluations do not depend on Base; compare after collection. These initial
+walltimes are requests, not evidence that full runs will finish in 90 minutes.
+The workflow is locally unit-tested with mocked PBS calls; the environment,
+download, GPU execution and full benchmark results are not verified by those tests.
+
+VH source training uses the repository's legacy `temporal` + `object_relation`
+split: 150 train pairs, 50 validation pairs, and up to 300 test pairs, subject
+to video-disjoint filtering. It does **not** train on all five VH tasks, and
+actual held-out counts must come from run outputs. EH uses a deterministic
+70/10/20 video-disjoint split (seed 42). Mixed is the library-managed union of
+those VH and EH train splits, retaining held-out validation/test sets.
+`VideoHallucer_full_transfer_v1` can supply the two required VH subsets.
+Mixed shuffles the union of QA records; source proportions follow those train
+set sizes, not a separate 50/50 sampler.
+
+All sources use the same exact positive optimizer-step budget (default B=50),
+`adaptive_pos_neg`, 32 teacher frames, and 8 student frames at size 448.
+Default AP=0.9 and AN=0.25 are predeclared, not tuned on VideoMME. Any alternative
+coefficients must be chosen using source validation only, then frozen in a
+new root before target evaluation. Epochs (default 20) provide capacity to
+reach B; the trainer must reject insufficient capacity or skipped-loss runs
+that fail to reach exactly B. VideoMME is frame-only, without audio/subtitles.
+Retention margin `--epsilon-pp 1.0` is predeclared in `experiment.json`.
+Evaluation uses the official frame-only multiple-choice prompt with a conservative
+anchored extractor accepting only `A`, `A.`, or `(A)` (and B/C/D), not the upstream
+broad answer-search regex. Other outputs count incorrect and are reported as
+invalid. This is a controlled 8-frame comparison, not a leaderboard reproduction.
+
+### Gadi Data Download
+
+Use a matching packed environment archive, not a permanent unpacked environment
+on GData. The canonical HF dataset namespace is `lmms-eval/Video-MME`.
+Its 20 video ZIPs total approximately 101 GB; allow GData capacity for extracted
+videos and at least one archive's transient space in PBS_JOBFS (40 GB requested).
+ZIPs are not retained on GData. Do not download the full dataset
+to this local checkout. The download helper prepares the evaluator's
+`questions.json` and video layout under `DATA_ROOT` on Gadi:
+
+```bash
+cd /scratch/hn98/$USER/Adaptive-SEED
+module load python3/3.11.7
+ENV_ARCHIVE=/g/data/hn98/$USER/envs/adaptive_seed_qwen25_20261108T023033.tar.gz
+DATA_ROOT=/g/data/hn98/$USER/datasets/VideoMME
+qsub -v "ENV_ARCHIVE=$ENV_ARCHIVE,DATA_ROOT=$DATA_ROOT" scripts/prepare_videomme_data.pbs
+```
+
+Wait for the download job to finish successfully and inspect its log, not only
+the qsub job ID. The GPU planner preflights resolved VideoMME files, source
+annotations/videos, the environment archive, and offline model weight shards.
+Model caches (including BiRefNet) must already be populated. Cache paths are
+`/g/data/hn98/$USER/models/hf_cache_qwen25` directly for Qwen2.5,
+`/g/data/hn98/$USER/models/hf_cache_qwen3/hub` for Qwen3, and
+`/g/data/hn98/$USER/models/hf_cache_internvl35/hub` for InternVL3.5.
+Supply the validated archive matching the chosen model; the example archive
+name above is not a claim of current environment/GPU verification.
+
+### Plan, Smoke, And Submit
+
+The default invocation is a read-only plan and preflight: no experiment root
+or jobs are created. `--datasets videohallucer eventhallusion mixed` is the
+default; selecting fewer sources produces 1 + 2 jobs per selected source.
+
+```bash
+GROUP=/g/data/hn98/$USER/projects/adaptive_seed/runs/videomme_experiment2_v1
+COMMON=(
+  --model qwen25 --env-archive "$ENV_ARCHIVE"
+  --hf-cache /g/data/hn98/$USER/models/hf_cache_qwen25
+  --data-root "$DATA_ROOT"
+  --vh-data /g/data/hn98/$USER/datasets/VideoHallucer_full_transfer_v1
+  --eh-data /g/data/hn98/$USER/datasets/EventHallusion
+  --ap 0.9 --an 0.25 --epsilon-pp 1.0
+)
+SMOKE=(--root "$GROUP/qwen25_smoke" --smoke-pairs 2 --limit 6 --max-train-steps 1 --epochs 20)
+python3 scripts/videomme_experiment.py "${COMMON[@]}" "${SMOKE[@]}"
+python3 scripts/videomme_experiment.py "${COMMON[@]}" "${SMOKE[@]}" --submit
+
+# Only after verifying smoke outputs and successful PBS exit status:
+FULL=(--root "$GROUP/qwen25" --max-train-steps 50 --epochs 20)
+python3 scripts/videomme_experiment.py "${COMMON[@]}" "${FULL[@]}"
+python3 scripts/videomme_experiment.py "${COMMON[@]}" "${FULL[@]}" --submit
+```
+
+Full runs omit both smoke flags; no evaluation limit is silently added.
+Either `--smoke-pairs` or `--limit` marks the entire root as smoke, even if
+training is full-sized. Smoke roots must contain `smoke` in their final path
+component and cannot share a full root. Repeat with separate model roots,
+the appropriate model key, archive, and cache path for the other models.
+
+Submission freezes Python source and worker/evaluator/decoder scripts under
+`root/code`, plus immutable `experiment.json`. Resume rejects code, input,
+coefficient, budget, margin or environment drift. Environment extraction and
+`conda-unpack` run only in PBS_JOBFS, with HF module and general runtime caches
+also in JobFS. No unpacked environment is retained on GData; GData holds the
+archive, read-only model cache, datasets, source snapshot, and intended run
+artifacts. Every GPU job requests `gdata/hn98+scratch/hn98+scratch/jp09`.
+
+`jobs.tsv` journals accepted IDs. If qsub rejects a partial batch, retain those
+jobs and fill only never-submitted entries with the identical arguments:
+
+```bash
+python3 scripts/videomme_experiment.py "${COMMON[@]}" "${FULL[@]}" --fill-unsubmitted
+python3 scripts/videomme_experiment.py "${COMMON[@]}" "${FULL[@]}" --fill-unsubmitted --submit
+```
+
+Recorded jobs are never automatically retried, even if they failed. The fill
+operation preserves the source-training job ID as its evaluation's `afterok`
+dependency. Concurrent launchers are locked out. If a submission was interrupted
+with `submission_pending.json` left behind, reconcile it against PBS before
+removing that guard; never blindly resubmit a potentially accepted job.
+
+### Provenance And Collection
+
+`scripts/videomme_train.py` calls the normal `seed_video.cli.main` core pipeline.
+After source splitting and before model/training setup, it rejects source
+train/val/test overlap with VideoMME by resolved path, normalized YouTube stem
+(removing `v_`), or same-size SHA256 identity. Only size-matched target files
+are hashed, avoiding a blanket 100 GB target hash pass. It also rejects
+byte-identical source files across different source splits. Re-encodings with
+different names and bytes are not detectable by this identity audit.
+The immutable `work/<source>/training_manifest.json` contains exact source item
+IDs, video identities and SHA256 values, without target questions/answer labels.
+
+The decoder fallback is installed by a runtime monkeypatch of
+`seed_video.data.video.run`, without editing frozen library source or adapter
+configuration. Decoder events are recorded separately under
+`work/<source>/decoder_override/`. Only a successful full source core pipeline
+(including its binary evaluations) receives `TRAIN_COMPLETE.json`. The worker
+then requires one unique `adaptive_pos_neg_s0_*_adapter.pt` in that source's work,
+matching dataset metadata, audited train IDs, model/alphas, and a matching
+optimizer-budget sidecar proving B completed steps. It never selects an
+arbitrary latest adapter or reuses an adapter from another source root.
+
+Evaluation outputs are exactly `root/evaluation/base`, `videohallucer`,
+`eventhallusion`, and `mixed`, each with predictions, result CSV and completion
+marker. Collection compares identical target protocols and writes
+`retention_results.csv` and `retention_details.csv` (duration/domain/tasks):
+
+```bash
+python3 scripts/collect_videomme.py --root "$GROUP/qwen25" --epsilon-pp 1.0
+grep -H -E 'Traceback|Exit Status|Walltime Used' "$GROUP/qwen25/logs/"*.out
+```
+
+The predeclared retention test uses a video-cluster bootstrap, one-sided 95%
+lower confidence bound against minus epsilon in percentage points. Smoke runs
+are not assessed for retention. Completion artifacts alone do not establish
+successful scheduler execution; also verify PBS Exit Status 0 for the jobs.

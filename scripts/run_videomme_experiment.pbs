@@ -1,0 +1,24 @@
+#!/bin/bash
+#PBS -P hn98
+#PBS -q gpuhopper
+#PBS -l ncpus=12,ngpus=1,mem=160GB,jobfs=100GB,walltime=01:30:00
+#PBS -l storage=gdata/hn98+scratch/hn98+scratch/jp09
+#PBS -j oe
+set -euo pipefail
+module load python3/3.11.7 cuda/12.3.2
+cd "${EXPERIMENT_ROOT:?}/code"
+ENV_ARCHIVE=$(python3 -c 'import json,os; print(json.load(open(os.environ["EXPERIMENT_ROOT"]+"/experiment.json"))["env_archive"])')
+ENV_ROOT="${PBS_JOBFS:?}/videomme_env"
+mkdir -p "$ENV_ROOT"
+tar -xzf "$ENV_ARCHIVE" -C "$ENV_ROOT"
+unset PYTHONHOME PYTHONPATH
+export PYTHONNOUSERSITE=1 PYTHONUNBUFFERED=1 OMP_NUM_THREADS="${PBS_NCPUS:-12}"
+export HF_MODULES_CACHE="$PBS_JOBFS/hf_modules" XDG_CACHE_HOME="$PBS_JOBFS/cache"
+mkdir -p "$HF_MODULES_CACHE" "$XDG_CACHE_HOME"
+"$ENV_ROOT/bin/python" "$ENV_ROOT/bin/conda-unpack"
+export PATH="$ENV_ROOT/bin:$PATH" CONDA_PREFIX="$ENV_ROOT" PYTHONPATH="$PWD/src"
+DRIVER="$PWD/scripts/videomme_experiment.py"
+if [[ ! -f "$DRIVER" ]]; then
+  DRIVER="${PBS_O_WORKDIR:?}/scripts/videomme_experiment.py"
+fi
+"$ENV_ROOT/bin/python" -u "$DRIVER" --root "$EXPERIMENT_ROOT" --worker "${EXPERIMENT_JOB:?}"

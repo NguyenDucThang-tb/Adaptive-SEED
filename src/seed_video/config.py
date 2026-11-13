@@ -51,25 +51,35 @@ def run(runtime):
         runtime.CFG.update(n_frames=8, tcd_frames=4, epochs=1, grad_ckpt=False, eval_train=True, open_max_new=32)
     if getattr(runtime.args, 'epochs', None) is not None:
         runtime.CFG['epochs'] = runtime.args.epochs
+    max_train_steps = getattr(runtime.args, 'max_train_steps', None)
+    if max_train_steps is not None:
+        if max_train_steps < 1:
+            raise ValueError('--max-train-steps must be positive')
+        runtime.CFG['max_train_steps'] = max_train_steps
     runtime.CFG['vh_eval_tasks'] = list(dict.fromkeys(getattr(runtime.args, 'vh_eval_tasks', None) or []))
     if runtime.CFG['vh_eval_tasks']:
         from seed_video.data.transfer import VH_TASKS
         runtime.CFG['subsets'] = [VH_TASKS[t] for t in runtime.CFG['vh_eval_tasks']]
     smoke_pairs = getattr(runtime.args, 'smoke_pairs', None)
-    if runtime.CFG['train_dataset'] == 'eventhallusion':
+    if runtime.CFG['train_dataset'] in ('eventhallusion', 'mixed'):
         train_fraction = runtime.args.eh_train_fraction
         val_fraction = runtime.args.eh_val_fraction
         if not (0 < train_fraction < 1 and 0 < val_fraction < 1
                 and train_fraction + val_fraction < 1):
             raise ValueError('EventHallusion train/val fractions must be positive and sum to less than 1.')
         if runtime.args.no_eh:
-            raise ValueError('--no-eh cannot be used when EventHallusion is the training dataset.')
+            raise ValueError('--no-eh cannot be used when EventHallusion is a training dataset.')
+    if runtime.CFG['train_dataset'] == 'mixed' and runtime.CFG['vh_eval_tasks']:
+        raise ValueError('--vh-eval-tasks is target-only evaluation and cannot be used with mixed training.')
     if smoke_pairs is not None:
         if smoke_pairs < 1:
             raise ValueError('--smoke-pairs must be >= 1')
         if runtime.CFG['train_dataset'] == 'videohallucer':
             runtime.CFG.update(subsets=['temporal'], n_train_pairs=smoke_pairs, n_val_pairs=1, n_test_pairs=1)
             print(f'SMOKE mode: temporal only; train={smoke_pairs} pair(s), val=1 pair, test=1 pair; EventHallusion disabled')
+        elif runtime.CFG['train_dataset'] == 'mixed':
+            runtime.CFG.update(subsets=['temporal'], n_train_pairs=smoke_pairs, n_val_pairs=1, n_test_pairs=1)
+            print(f'SMOKE mode: mixed; VH train={smoke_pairs} pair(s), EH train={smoke_pairs} video(s); val/test=1 per source')
         else:
             print(f'SMOKE mode: EventHallusion; train={smoke_pairs} video(s), val=1 video, test=1 video')
     teacher_frames = getattr(runtime.args, 'teacher_frames', None) or runtime.CFG['n_frames']
@@ -83,7 +93,7 @@ def run(runtime):
     _, runtime.CFG['spatial_stride'] = model_spec(runtime.CFG['model_id'])
     runtime.CFG['feature_temporal_stride'] = 1 if runtime.CFG['model_id'].startswith('OpenGVLab/InternVL3_5-') else 2
     runtime.CFG['eh']['enable'] = not runtime.args.no_eh and (
-        smoke_pairs is None or runtime.CFG['train_dataset'] == 'eventhallusion'
+        smoke_pairs is None or runtime.CFG['train_dataset'] in ('eventhallusion', 'mixed')
     )
     runtime.CFG['eh']['root'] = str(runtime.WORK / 'EventHallusion')
     runtime.CACHE = str(runtime.WORK / f"cdt_distill_cache_f{runtime.CFG['n_frames']}_{runtime.CFG['frame_size']}")

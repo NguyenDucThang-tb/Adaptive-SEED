@@ -1,6 +1,8 @@
-"""Create deterministic, video-disjoint splits for EventHallusion training."""
+"""Create deterministic, video-disjoint splits for EH and mixed training."""
 from collections import defaultdict
 import hashlib
+import json
+from pathlib import Path
 import random
 from types import MethodType
 
@@ -67,6 +69,12 @@ def _take_videos(items, count):
 
 
 def configure_eval_splits(runtime):
+    if getattr(runtime.args, 'train_dataset', 'videohallucer') == 'mixed':
+        splits = {'VH_VAL': runtime.VH_VAL, 'VH_TEST': runtime.VH_TEST,
+                  'EH_VAL': runtime.EH_VAL, 'EH_TEST': runtime.EH_TEST}
+        for subset in sorted({item['subset'] for item in runtime.EH_TEST}):
+            splits[f'{subset}_TEST'] = [item for item in runtime.EH_TEST if item['subset'] == subset]
+        return splits
     if getattr(runtime.args, 'train_dataset', 'videohallucer') == 'eventhallusion':
         splits = {'EH_VAL': runtime.EH_VAL, 'EH_TEST': runtime.EH_TEST}
         for subset in sorted({item['subset'] for item in runtime.EH_TEST}):
@@ -91,8 +99,83 @@ def configure_eval_splits(runtime):
     return splits
 
 
+def _mixed_items(items, source):
+    return [dict(item, source=source, video=str(Path(item['video']).resolve())) for item in items]
+
+
+def _check_mixed_splits(runtime, splits):
+    seen_videos, seen_keys = {}, set()
+    for name, items in splits.items():
+        for item in items:
+            video = str(Path(item['video']).resolve())
+            if video in seen_videos and seen_videos[video] != name:
+                raise ValueError(
+                    f'Mixed video leakage: resolved video {video} occurs in '
+                    f'{seen_videos[video]} and {name} splits (including cross-source aliases).'
+                )
+            seen_videos[video] = name
+            key = runtime.key(item)
+            if key in seen_keys:
+                raise ValueError(f'Duplicate mixed item key: {key}')
+            seen_keys.add(key)
+
+
+def _mixed_records(runtime, items):
+    return sorted([runtime.key(i), i['video'], i['question'], i['answer']] for i in items)
+
+
+def _run_mixed(runtime):
+    from .transfer import write_manifest
+
+    args = runtime.args
+    if getattr(args, 'no_eh', False):
+        raise ValueError('--no-eh cannot be used with mixed training.')
+    if runtime.CFG.get('vh_eval_tasks'):
+        raise ValueError('Mixed training cannot use target-only --vh-eval-tasks.')
+    vh = [_mixed_items(items, 'VH') for items in (runtime.TRAIN, runtime.VAL, runtime.TEST)]
+    if not all(vh):
+        raise ValueError('Mixed training requires nonempty VH train/val/test splits.')
+    all_eh = _mixed_items(runtime.EH, 'EH')
+    eh = split_eventhallusion(all_eh, args.eh_train_fraction, args.eh_val_fraction, args.eh_split_seed)
+    full_splits = {name: v + e for name, v, e in zip(('train', 'val', 'test'), vh, eh)}
+    # Validate the full protocol before smoke trimming can hide a shared video.
+    _check_mixed_splits(runtime, full_splits)
+    smoke_count = getattr(args, 'smoke_pairs', None)
+    if smoke_count is not None:
+        if smoke_count < 1:
+            raise ValueError('--smoke-pairs must be >= 1')
+        eh = (_take_videos(eh[0], smoke_count), _take_videos(eh[1], 1), _take_videos(eh[2], 1))
+    selected = {name: v + e for name, v, e in zip(('train', 'val', 'test'), vh, eh)}
+    source_items = _mixed_items(getattr(runtime, 'ITEMS', sum(vh, [])), 'VH') + all_eh
+    manifest = dict(
+        version='mixed_v1', dataset='mixed',
+        vh=dict(seed=runtime.CFG.get('split_seed'), subsets=runtime.CFG.get('subsets'),
+                revision=runtime.CFG.get('hf_revision'),
+                pair_counts=[runtime.CFG.get(k) for k in ('n_train_pairs', 'n_val_pairs', 'n_test_pairs')]),
+        eh=dict(seed=args.eh_split_seed, fractions=[args.eh_train_fraction, args.eh_val_fraction]),
+        smoke_pairs=smoke_count,
+        source_digest=hashlib.sha256(json.dumps(_mixed_records(runtime, source_items)).encode()).hexdigest(),
+        splits={name: _mixed_records(runtime, items) for name, items in full_splits.items()},
+        selected={name: _mixed_records(runtime, items) for name, items in selected.items()},
+    )
+    write_manifest(runtime.WORK / 'mixed_train_val_test.json', manifest)
+    runtime.VH_TRAIN, runtime.VH_VAL, runtime.VH_TEST = vh
+    runtime.EH_ALL_ITEMS = all_eh
+    runtime.EH_TRAIN, runtime.EH_VAL, runtime.EH_TEST = eh
+    runtime.TRAIN, runtime.VAL, runtime.TEST = (selected[name] for name in ('train', 'val', 'test'))
+    runtime.EH = runtime.EH_TEST
+    runtime.EH_SPLITS = sorted({i['subset'] for i in runtime.EH_TEST})
+    runtime.CFG['eval_train'] = False
+    runtime.EXTRA_EVAL = []
+    runtime.ALL_VIDEOS = sorted({i['video'] for items in selected.values() for i in items})
+    print('Mixed VH+EH video-disjoint split:', {name: len(items) for name, items in selected.items()})
+
+
 def run(runtime):
     runtime.configure_eval_splits = MethodType(configure_eval_splits, runtime)
+    if getattr(runtime.args, 'train_dataset', 'videohallucer') == 'mixed':
+        _run_mixed(runtime)
+        return
     if getattr(runtime.args, 'train_dataset', 'videohallucer') != 'eventhallusion':
         return
     args = runtime.args

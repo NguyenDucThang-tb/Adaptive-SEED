@@ -1,0 +1,35 @@
+#!/bin/bash
+#PBS -P hn98
+#PBS -q copyq
+#PBS -N videomme_data
+#PBS -l ncpus=1,mem=16GB,jobfs=40GB,walltime=02:00:00
+#PBS -l storage=scratch/hn98+gdata/hn98
+#PBS -l wd
+#PBS -j oe
+set -euo pipefail
+
+# Resubmit with the same VIDEOMME_DEST to resume verified archive completions.
+ARCHIVE="${ENV_ARCHIVE:?Set ENV_ARCHIVE to the existing packed conda environment}"
+DEST="${VIDEOMME_DEST:-${DATA_ROOT:-/g/data/hn98/$USER/datasets/VideoMME}}"
+ENV_ROOT="${PBS_JOBFS:?}/env"
+mkdir -p "$ENV_ROOT"
+tar -xzf "$ARCHIVE" -C "$ENV_ROOT"
+unset PYTHONHOME PYTHONPATH HF_HUB_OFFLINE TRANSFORMERS_OFFLINE
+export PYTHONNOUSERSITE=1 PYTHONUNBUFFERED=1
+export HF_HOME="$PBS_JOBFS/huggingface"
+export HF_XET_CACHE="$PBS_JOBFS/xet"
+export HF_HUB_DISABLE_XET=1
+"$ENV_ROOT/bin/python" "$ENV_ROOT/bin/conda-unpack"
+if ! "$ENV_ROOT/bin/python" -c 'import pyarrow.parquet' >/dev/null 2>&1; then
+    "$ENV_ROOT/bin/python" -m pip install --no-cache-dir --only-binary=:all: --no-deps \
+        --target "$PBS_JOBFS/python-deps" 'pyarrow==23.0.1'
+    export PYTHONPATH="$PBS_JOBFS/python-deps"
+fi
+ARGS=(--destination "$DEST" --jobfs "$PBS_JOBFS/archives")
+if [[ -n "${VIDEOMME_REVISION:-}" ]]; then
+    ARGS+=(--revision "$VIDEOMME_REVISION")
+fi
+if [[ "${VIDEOMME_ANNOTATIONS_ONLY:-0}" == 1 ]]; then
+    ARGS+=(--annotations-only)
+fi
+"$ENV_ROOT/bin/python" scripts/download_videomme.py "${ARGS[@]}"
