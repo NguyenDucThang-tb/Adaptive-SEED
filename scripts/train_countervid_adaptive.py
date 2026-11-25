@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Experimental CounterVid 16/8-frame token-gain LoRA distillation."""
 import argparse
+import hashlib
 import json
 import random
 import sys
@@ -19,9 +20,14 @@ def main():
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--max-answer-tokens', type=int, default=128)
     parser.add_argument('--size', type=int, default=448)
+    parser.add_argument('--method', choices=['sft', 'kd_basic', 'onpolicy_gkd', 'adaptive'], default='adaptive')
+    parser.add_argument('--manifest', help='Frozen subset manifest from prepare_countervid_subsets.py')
+    parser.add_argument('--subset-size', type=int, help='Subset size within the manifest')
     args = parser.parse_args()
     if args.max_steps < 1 or args.max_answer_tokens < 1 or args.size < 1:
         parser.error('step, token, and size limits must be positive')
+    if bool(args.manifest) != (args.subset_size is not None):
+        parser.error('--manifest and --subset-size must be supplied together')
 
     import cv2
     import numpy as np
@@ -29,13 +35,26 @@ def main():
     from peft import LoraConfig, get_peft_model
     from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
     from seed_video.data.countervid import load_freeform
-    from seed_video.training.countervid_loss import adaptive_sequence_loss
+    from seed_video.training.countervid_loss import adaptive_sequence_loss, sequence_distillation_loss
 
     if not torch.cuda.is_available():
         raise RuntimeError('This training entry point requires a CUDA GPU')
     items = load_freeform(args.data_root, 'train')
     if not items:
         raise RuntimeError('No training examples')
+    if args.manifest:
+        manifest = json.loads(Path(args.manifest).read_text(encoding='utf-8'))
+        if manifest.get('schema') != 'countervid-freeform-subsets-v1':
+            raise ValueError('Unsupported subset manifest')
+        metadata = Path(args.data_root) / 'train' / 'metadata.parquet'
+        digest = hashlib.sha256(metadata.read_bytes()).hexdigest()
+        if digest != manifest['metadata_sha256']['train']:
+            raise ValueError('Training metadata differs from subset manifest')
+        ids = manifest['subsets'][str(args.subset_size)]
+        by_id = {item['id']: item for item in items}
+        if len(ids) != args.subset_size or len(set(ids)) != len(ids) or any(i not in by_id for i in ids):
+            raise ValueError('Invalid subset IDs')
+        items = [by_id[i] for i in ids]
     random.seed(args.seed)
     torch.manual_seed(args.seed)
     random.shuffle(items)
@@ -88,15 +107,33 @@ def main():
                                   return_tensors='pt')['input_ids'][:, :args.max_answer_tokens].to('cuda')
         if ids.shape[1] == 0:
             raise RuntimeError(f"Empty answer tokens: {item['id']}")
+        if args.method == 'onpolicy_gkd':
+            empty = ids[:, :0]
+            generation_input, prompt_len = inputs(item, 8, empty)
+            model.eval()
+            with torch.no_grad():
+                generated = model.generate(**generation_input, max_new_tokens=args.max_answer_tokens,
+                                           do_sample=True, temperature=1.0, top_k=0, top_p=1.0,
+                                           use_cache=True)
+            ids = generated[:, prompt_len:]
+            if ids.shape[1] == 0:
+                raise RuntimeError(f"Empty generated response: {item['id']}")
         input8, p8 = inputs(item, 8, ids)
-        input16, p16 = inputs(item, 16, ids)
-        model.eval()
-        with torch.no_grad(), model.disable_adapter():
-            teacher = model(**input16).logits[:, p16 - 1:p16 - 1 + ids.shape[1]].float()
-            base = model(**input8).logits[:, p8 - 1:p8 - 1 + ids.shape[1]].float()
+        teacher = base = None
+        if args.method != 'sft':
+            input16, p16 = inputs(item, 16, ids)
+            model.eval()
+            with torch.no_grad(), model.disable_adapter():
+                teacher = model(**input16).logits[:, p16 - 1:p16 - 1 + ids.shape[1]].float()
+                if args.method == 'adaptive':
+                    base = model(**input8).logits[:, p8 - 1:p8 - 1 + ids.shape[1]].float()
         model.train()
         student = model(**input8).logits[:, p8 - 1:p8 - 1 + ids.shape[1]]
-        loss, info = adaptive_sequence_loss(student, teacher, base, ids, torch.ones_like(ids))
+        if args.method == 'adaptive':
+            loss, info = adaptive_sequence_loss(student, teacher, base, ids, torch.ones_like(ids))
+        else:
+            loss, info = sequence_distillation_loss(student, teacher, ids, torch.ones_like(ids),
+                                                     method=args.method)
         loss.backward()
         torch.nn.utils.clip_grad_norm_((p for p in model.parameters() if p.requires_grad), 1.0)
         opt.step()

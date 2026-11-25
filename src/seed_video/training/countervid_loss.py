@@ -5,6 +5,39 @@ import torch
 import torch.nn.functional as F
 
 
+def sequence_distillation_loss(student, teacher, labels, mask, *, method, temperature=2.0):
+    """SFT, forward-KL KD, or on-policy generalized JSD over response tokens."""
+    if method not in ('sft', 'kd_basic', 'onpolicy_gkd'):
+        raise ValueError(f'Unsupported method: {method}')
+    if not math.isfinite(temperature) or temperature <= 0:
+        raise ValueError('temperature must be positive')
+    if student.ndim != 3 or labels.shape != student.shape[:2] or mask.shape != labels.shape:
+        raise ValueError('Invalid token dimensions')
+    valid = mask.bool()
+    if not valid.any():
+        raise ValueError('answer mask must contain at least one token')
+    y = labels[valid].long()
+    if (y < 0).any() or (y >= student.shape[-1]).any():
+        raise ValueError('answer token outside vocabulary')
+    s = student[valid].float()
+    ce = F.cross_entropy(s, y)
+    if method == 'sft':
+        return ce, {'ce': ce.detach(), 'kd': ce.detach().new_zeros(())}
+    if teacher is None or teacher.shape != student.shape:
+        raise ValueError('Teacher logits must match student logits')
+    t = teacher.detach()[valid].float()
+    if method == 'kd_basic':
+        lt = F.log_softmax(t / temperature, -1)
+        ls = F.log_softmax(s / temperature, -1)
+        kd = (lt.exp() * (lt - ls)).sum(-1).mean() * temperature ** 2
+    else:
+        ls, lt = F.log_softmax(s, -1), F.log_softmax(t, -1)
+        m = torch.logaddexp(ls, lt) - math.log(2)
+        kd = (0.5 * (ls.exp() * (ls - m)).sum(-1) +
+              0.5 * (lt.exp() * (lt - m)).sum(-1)).mean()
+    return kd, {'ce': ce.detach(), 'kd': kd.detach()}
+
+
 def adaptive_sequence_loss(student, teacher, base, labels, mask, *, tau=1.0, kd_weight=1.0):
     """CE plus weighted reverse KL, normalized over answer tokens only.
 

@@ -5,7 +5,7 @@ import pytest
 import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
-from seed_video.training.countervid_loss import adaptive_sequence_loss
+from seed_video.training.countervid_loss import adaptive_sequence_loss, sequence_distillation_loss
 
 
 def test_gain_mask_and_gradient_isolation():
@@ -29,3 +29,15 @@ def test_empty_mask_and_invalid_token_rejected():
         adaptive_sequence_loss(z, z, z, torch.zeros(1, 1), torch.zeros(1, 1))
     with pytest.raises(ValueError, match='vocabulary'):
         adaptive_sequence_loss(z, z, z, torch.full((1, 1), 2), torch.ones(1, 1))
+
+
+@pytest.mark.parametrize('method', ['sft', 'kd_basic', 'onpolicy_gkd'])
+def test_sequence_methods_mask_and_detach(method):
+    student = torch.randn(1, 3, 4, requires_grad=True)
+    teacher = torch.randn(1, 3, 4, requires_grad=True)
+    loss, _ = sequence_distillation_loss(student, teacher, torch.tensor([[1, 2, -100]]),
+                                         torch.tensor([[1, 1, 0]]), method=method)
+    loss.backward()
+    assert torch.isfinite(loss)
+    assert student.grad[0, 2].abs().sum() == 0
+    assert teacher.grad is None
