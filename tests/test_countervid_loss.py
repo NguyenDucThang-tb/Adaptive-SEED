@@ -31,7 +31,7 @@ def test_empty_mask_and_invalid_token_rejected():
         adaptive_sequence_loss(z, z, z, torch.full((1, 1), 2), torch.ones(1, 1))
 
 
-@pytest.mark.parametrize('method', ['sft', 'kd_basic', 'onpolicy_gkd'])
+@pytest.mark.parametrize('method', ['sft', 'kd_basic', 'onpolicy_gkd', 'video_opd'])
 def test_sequence_methods_mask_and_detach(method):
     student = torch.randn(1, 3, 4, requires_grad=True)
     teacher = torch.randn(1, 3, 4, requires_grad=True)

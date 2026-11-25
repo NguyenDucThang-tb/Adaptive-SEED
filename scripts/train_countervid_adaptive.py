@@ -23,19 +23,24 @@ def main():
     parser.add_argument('--method', choices=['sft', 'kd_basic', 'onpolicy_gkd', 'adaptive'], default='adaptive')
     parser.add_argument('--manifest', help='Frozen subset manifest from prepare_countervid_subsets.py')
     parser.add_argument('--subset-size', type=int, help='Subset size within the manifest')
+    parser.add_argument('--resume', action='store_true', help='Resume the checkpoint in --output')
+    parser.add_argument('--stop-after', type=int, help='Stop after this many steps for resume testing')
     args = parser.parse_args()
     if args.max_steps < 1 or args.max_answer_tokens < 1 or args.size < 1:
         parser.error('step, token, and size limits must be positive')
     if bool(args.manifest) != (args.subset_size is not None):
         parser.error('--manifest and --subset-size must be supplied together')
+    if args.stop_after is not None and not 1 <= args.stop_after < args.max_steps:
+        parser.error('--stop-after must be between 1 and max-steps minus 1')
 
     import cv2
     import numpy as np
     import torch
-    from peft import LoraConfig, get_peft_model
+    from peft import LoraConfig, get_peft_model, get_peft_model_state_dict, set_peft_model_state_dict
     from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
     from seed_video.data.countervid import load_freeform
     from seed_video.training.countervid_loss import adaptive_sequence_loss, sequence_distillation_loss
+    from seed_video.training.countervid_checkpoint import save_checkpoint, load_checkpoint
 
     if not torch.cuda.is_available():
         raise RuntimeError('This training entry point requires a CUDA GPU')
@@ -59,8 +64,28 @@ def main():
     torch.manual_seed(args.seed)
     random.shuffle(items)
     output = Path(args.output)
-    output.mkdir(parents=True, exist_ok=False)
-    (output / 'config.json').write_text(json.dumps(vars(args), indent=2) + '\n')
+    config = {key: value for key, value in vars(args).items() if key not in ('resume', 'stop_after')}
+    config['ordered_ids_sha256'] = hashlib.sha256(
+        json.dumps([item['id'] for item in items]).encode()).hexdigest()
+    config['metadata_sha256'] = hashlib.sha256(
+        (Path(args.data_root) / 'train' / 'metadata.parquet').read_bytes()).hexdigest()
+    repo_root = Path(__file__).resolve().parents[1]
+    config['code_sha256'] = {
+        str(path.relative_to(repo_root)): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in (Path(__file__).resolve(),
+                     repo_root / 'src/seed_video/data/countervid.py',
+                     repo_root / 'src/seed_video/training/countervid_loss.py',
+                     repo_root / 'src/seed_video/training/countervid_checkpoint.py')
+    }
+    if args.manifest:
+        config['manifest_sha256'] = hashlib.sha256(Path(args.manifest).read_bytes()).hexdigest()
+    checkpoint = output / 'training_checkpoint.pt'
+    if args.resume:
+        if not checkpoint.is_file():
+            raise FileNotFoundError(f'No checkpoint to resume: {checkpoint}')
+    else:
+        output.mkdir(parents=True, exist_ok=False)
+        (output / 'config.json').write_text(json.dumps(config, indent=2) + '\n')
     processor = AutoProcessor.from_pretrained(args.model, local_files_only=True)
     model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
         args.model, torch_dtype=torch.bfloat16, attn_implementation='sdpa',
@@ -72,6 +97,11 @@ def main():
     model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={'use_reentrant': False})
     model.enable_input_require_grads()
     opt = torch.optim.AdamW((p for p in model.parameters() if p.requires_grad), lr=args.lr)
+    start_step = 0
+    if args.resume:
+        start_step = load_checkpoint(checkpoint, config=config, optimizer=opt,
+                                     set_adapter=lambda state: set_peft_model_state_dict(model, state))
+        print(f'Resumed checkpoint at step {start_step}', flush=True)
 
     def inputs(item, count, tokens):
         cap = cv2.VideoCapture(item['video_path'])
@@ -101,7 +131,7 @@ def main():
         batch['attention_mask'] = torch.cat((batch['attention_mask'], torch.ones_like(tokens)), dim=1)
         return batch, prompt_len
 
-    for step in range(args.max_steps):
+    for step in range(start_step, args.max_steps):
         item = items[step % len(items)]
         ids = processor.tokenizer(item['answer'], add_special_tokens=False,
                                   return_tensors='pt')['input_ids'][:, :args.max_answer_tokens].to('cuda')
@@ -134,12 +164,21 @@ def main():
         else:
             loss, info = sequence_distillation_loss(student, teacher, ids, torch.ones_like(ids),
                                                      method=args.method)
+        if not torch.isfinite(loss):
+            raise FloatingPointError(f"Non-finite loss at step {step + 1}: {item['id']}")
         loss.backward()
-        torch.nn.utils.clip_grad_norm_((p for p in model.parameters() if p.requires_grad), 1.0)
+        torch.nn.utils.clip_grad_norm_((p for p in model.parameters() if p.requires_grad), 1.0,
+                                       error_if_nonfinite=True)
         opt.step()
         opt.zero_grad(set_to_none=True)
+        save_checkpoint(checkpoint, config=config, step=step + 1,
+                        adapter={k: v.detach().cpu() for k, v in get_peft_model_state_dict(model).items()},
+                        optimizer=opt)
         print(json.dumps({'step': step + 1, 'id': item['id'], 'loss': loss.item(),
                           **{k: v.item() for k, v in info.items()}}), flush=True)
+        if args.stop_after is not None and step + 1 >= args.stop_after:
+            print(f'Stopped after checkpoint step {step + 1}; resume with --resume', flush=True)
+            return
     model.save_pretrained(output / 'adapter')
     processor.save_pretrained(output / 'processor')
     print(f'Completed {args.max_steps} optimizer steps; adapter: {output / "adapter"}', flush=True)

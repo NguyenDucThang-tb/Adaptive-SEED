@@ -1,0 +1,59 @@
+#!/bin/bash
+#PBS -P hn98
+#PBS -q gpuhopper
+#PBS -l ncpus=12,ngpus=1,mem=160GB,jobfs=40GB,walltime=00:30:00
+#PBS -l storage=scratch/jp09+gdata/hn98
+#PBS -j oe
+set -euo pipefail
+
+: "${RUN:?Set RUN to the checkout directory}"
+: "${MANIFEST:?Set MANIFEST to a persistent manifest path}"
+: "${OUT:?Set OUT to the persistent output directory}"
+: "${MODE:?Set MODE to resume_smoke, train, or resume}"
+DATA=${DATA:-/g/data/hn98/$USER/datasets/countervid}
+MODEL=${MODEL:-/g/data/hn98/$USER/models/hf_cache_qwen25/models--Qwen--Qwen2.5-VL-7B-Instruct/snapshots/cc594898137f460bfe9f0759e9844b3ce807cfb5}
+ARCHIVE=${ARCHIVE:-/g/data/hn98/$USER/envs/adaptive_seed_qwen25_videomme_20261114_v2.tar.gz}
+SUBSET_SIZE=${SUBSET_SIZE:-1000}
+MAX_STEPS=${MAX_STEPS:-1000}
+
+case "$MODE" in resume_smoke|train|resume) ;; *) echo "Unknown MODE=$MODE" >&2; exit 2;; esac
+test -r "$ARCHIVE"
+test -r "$DATA/train/metadata.parquet"
+test -r "$DATA/validation/metadata.parquet"
+test -r "$MODEL/config.json"
+cd "$RUN"
+
+ENV_ROOT="$PBS_JOBFS/env"
+mkdir -p "$ENV_ROOT"
+tar -xzf "$ARCHIVE" -C "$ENV_ROOT"
+unset PYTHONHOME PYTHONPATH
+export PYTHONNOUSERSITE=1
+"$ENV_ROOT/bin/python" "$ENV_ROOT/bin/conda-unpack"
+if [[ ! -e "$MANIFEST" && "$MODE" == resume_smoke ]]; then
+  "$ENV_ROOT/bin/python" scripts/prepare_countervid_subsets.py \
+    --data-root "$DATA" --output "$MANIFEST" --seed 42 --sizes 1000 2000
+fi
+test -r "$MANIFEST"
+echo "Job=${PBS_JOBID:-unknown} MODE=$MODE"
+git rev-parse HEAD
+nvidia-smi
+
+ARGS=(--data-root "$DATA" --model "$MODEL" --output "$OUT"
+      --manifest "$MANIFEST" --subset-size "$SUBSET_SIZE"
+      --method adaptive --seed 42)
+SCRIPT=scripts/train_countervid_adaptive.py
+case "$MODE" in
+  resume_smoke)
+    "$ENV_ROOT/bin/python" -u "$SCRIPT" "${ARGS[@]}" --max-steps 2 --stop-after 1
+    "$ENV_ROOT/bin/python" -u "$SCRIPT" "${ARGS[@]}" --max-steps 2 --resume
+    echo "ADAPTIVE RESUME SMOKE COMPLETE: $OUT"
+    ;;
+  train)
+    "$ENV_ROOT/bin/python" -u "$SCRIPT" "${ARGS[@]}" --max-steps "$MAX_STEPS"
+    echo "ADAPTIVE TRAIN COMPLETE: $OUT"
+    ;;
+  resume)
+    "$ENV_ROOT/bin/python" -u "$SCRIPT" "${ARGS[@]}" --max-steps "$MAX_STEPS" --resume
+    echo "ADAPTIVE TRAIN COMPLETE: $OUT"
+    ;;
+esac

@@ -7,7 +7,7 @@ import torch.nn.functional as F
 
 def sequence_distillation_loss(student, teacher, labels, mask, *, method, temperature=2.0):
     """SFT, forward-KL KD, or on-policy generalized JSD over response tokens."""
-    if method not in ('sft', 'kd_basic', 'onpolicy_gkd'):
+    if method not in ('sft', 'kd_basic', 'onpolicy_gkd', 'video_opd'):
         raise ValueError(f'Unsupported method: {method}')
     if not math.isfinite(temperature) or temperature <= 0:
         raise ValueError('temperature must be positive')
@@ -30,11 +30,14 @@ def sequence_distillation_loss(student, teacher, labels, mask, *, method, temper
         lt = F.log_softmax(t / temperature, -1)
         ls = F.log_softmax(s / temperature, -1)
         kd = (lt.exp() * (lt - ls)).sum(-1).mean() * temperature ** 2
-    else:
+    elif method == 'onpolicy_gkd':
         ls, lt = F.log_softmax(s, -1), F.log_softmax(t, -1)
         m = torch.logaddexp(ls, lt) - math.log(2)
         kd = (0.5 * (ls.exp() * (ls - m)).sum(-1) +
               0.5 * (lt.exp() * (lt - m)).sum(-1)).mean()
+    else:
+        ls, lt = F.log_softmax(s, -1), F.log_softmax(t, -1)
+        kd = (ls.exp() * (ls - lt)).sum(-1).mean()
     return kd, {'ce': ce.detach(), 'kd': kd.detach()}
 
 

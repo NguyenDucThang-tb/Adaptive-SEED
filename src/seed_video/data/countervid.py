@@ -27,6 +27,7 @@ def select_freeform(rows, root, split):
         seen.add(sample_id)
         items.append(dict(id=sample_id, question=prompt.replace("<video>", "").strip(),
                           answer=answer, video_path=str(video),
+                          rejected_answer=row.get("rejected_answer"),
                           base_identifier=row.get("base_identifier"), split=split))
     return items
 
