@@ -15,8 +15,10 @@ MODEL=${MODEL:-/g/data/hn98/$USER/models/hf_cache_qwen25/models--Qwen--Qwen2.5-V
 ARCHIVE=${ARCHIVE:-/g/data/hn98/$USER/envs/adaptive_seed_qwen25_videomme_20261114_v2.tar.gz}
 SUBSET_SIZE=${SUBSET_SIZE:-1000}
 MAX_STEPS=${MAX_STEPS:-1000}
+METHOD=${METHOD:-adaptive}
 
 case "$MODE" in resume_smoke|train|resume) ;; *) echo "Unknown MODE=$MODE" >&2; exit 2;; esac
+case "$METHOD" in adaptive|kd_basic) ;; *) echo "Unsupported METHOD=$METHOD" >&2; exit 2;; esac
 test -r "$ARCHIVE"
 test -r "$DATA/train/metadata.parquet"
 test -r "$DATA/validation/metadata.parquet"
@@ -34,26 +36,26 @@ if [[ ! -e "$MANIFEST" && "$MODE" == resume_smoke ]]; then
     --data-root "$DATA" --output "$MANIFEST" --seed 42 --sizes 1000 2000
 fi
 test -r "$MANIFEST"
-echo "Job=${PBS_JOBID:-unknown} MODE=$MODE"
+echo "Job=${PBS_JOBID:-unknown} MODE=$MODE METHOD=$METHOD"
 git rev-parse HEAD
 nvidia-smi
 
 ARGS=(--data-root "$DATA" --model "$MODEL" --output "$OUT"
       --manifest "$MANIFEST" --subset-size "$SUBSET_SIZE"
-      --method adaptive --seed 42)
+      --method "$METHOD" --seed 42)
 SCRIPT=scripts/train_countervid_adaptive.py
 case "$MODE" in
   resume_smoke)
     "$ENV_ROOT/bin/python" -u "$SCRIPT" "${ARGS[@]}" --max-steps 2 --stop-after 1
     "$ENV_ROOT/bin/python" -u "$SCRIPT" "${ARGS[@]}" --max-steps 2 --resume
-    echo "ADAPTIVE RESUME SMOKE COMPLETE: $OUT"
+    echo "${METHOD^^} RESUME SMOKE COMPLETE: $OUT"
     ;;
   train)
     "$ENV_ROOT/bin/python" -u "$SCRIPT" "${ARGS[@]}" --max-steps "$MAX_STEPS"
-    echo "ADAPTIVE TRAIN COMPLETE: $OUT"
+    echo "${METHOD^^} TRAIN COMPLETE: $OUT"
     ;;
   resume)
     "$ENV_ROOT/bin/python" -u "$SCRIPT" "${ARGS[@]}" --max-steps "$MAX_STEPS" --resume
-    echo "ADAPTIVE TRAIN COMPLETE: $OUT"
+    echo "${METHOD^^} TRAIN COMPLETE: $OUT"
     ;;
 esac
