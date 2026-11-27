@@ -21,6 +21,7 @@ def main():
     parser.add_argument('--max-answer-tokens', type=int, default=128)
     parser.add_argument('--size', type=int, default=448)
     parser.add_argument('--method', choices=['sft', 'kd_basic', 'onpolicy_gkd', 'adaptive'], default='adaptive')
+    parser.add_argument('--preference-signal', choices=['textual', 'visual'], default='textual')
     parser.add_argument('--manifest', help='Frozen subset manifest from prepare_countervid_subsets.py')
     parser.add_argument('--subset-size', type=int, help='Subset size within the manifest')
     parser.add_argument('--resume', action='store_true', help='Resume the checkpoint in --output')
@@ -44,13 +45,15 @@ def main():
 
     if not torch.cuda.is_available():
         raise RuntimeError('This training entry point requires a CUDA GPU')
-    items = load_freeform(args.data_root, 'train')
+    items = load_freeform(args.data_root, 'train', args.preference_signal)
     if not items:
         raise RuntimeError('No training examples')
     if args.manifest:
         manifest = json.loads(Path(args.manifest).read_text(encoding='utf-8'))
         if manifest.get('schema') != 'countervid-freeform-subsets-v1':
             raise ValueError('Unsupported subset manifest')
+        if manifest.get('preference_signal', 'textual') != args.preference_signal:
+            raise ValueError('Subset manifest preference signal does not match training')
         metadata = Path(args.data_root) / 'train' / 'metadata.parquet'
         digest = hashlib.sha256(metadata.read_bytes()).hexdigest()
         if digest != manifest['metadata_sha256']['train']:

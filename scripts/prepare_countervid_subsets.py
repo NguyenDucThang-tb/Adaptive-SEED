@@ -37,11 +37,13 @@ def main():
     parser.add_argument('--output', required=True)
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--sizes', type=int, nargs='+', default=[1000, 2000])
+    parser.add_argument('--preference-signal', choices=['textual', 'visual'], default='textual')
     args = parser.parse_args()
     root = Path(args.data_root)
-    train = load_freeform(root, 'train')
-    validation = load_freeform(root, 'validation')
+    train = load_freeform(root, 'train', args.preference_signal)
+    validation = load_freeform(root, 'validation', args.preference_signal)
     manifest = build_manifest(train, validation, args.sizes + [len(train)], args.seed)
+    manifest['preference_signal'] = args.preference_signal
     manifest['metadata_sha256'] = {
         split: hashlib.sha256((root / split / 'metadata.parquet').read_bytes()).hexdigest()
         for split in ('train', 'validation')

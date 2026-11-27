@@ -16,9 +16,11 @@ ARCHIVE=${ARCHIVE:-/g/data/hn98/$USER/envs/adaptive_seed_qwen25_videomme_2026111
 SUBSET_SIZE=${SUBSET_SIZE:-1000}
 MAX_STEPS=${MAX_STEPS:-1000}
 METHOD=${METHOD:-adaptive}
+PREFERENCE_SIGNAL=${PREFERENCE_SIGNAL:-textual}
 
 case "$MODE" in resume_smoke|train|resume) ;; *) echo "Unknown MODE=$MODE" >&2; exit 2;; esac
 case "$METHOD" in adaptive|kd_basic) ;; *) echo "Unsupported METHOD=$METHOD" >&2; exit 2;; esac
+case "$PREFERENCE_SIGNAL" in textual|visual) ;; *) echo "Unsupported PREFERENCE_SIGNAL=$PREFERENCE_SIGNAL" >&2; exit 2;; esac
 test -r "$ARCHIVE"
 test -r "$DATA/train/metadata.parquet"
 test -r "$DATA/validation/metadata.parquet"
@@ -33,7 +35,8 @@ export PYTHONNOUSERSITE=1
 "$ENV_ROOT/bin/python" "$ENV_ROOT/bin/conda-unpack"
 if [[ ! -e "$MANIFEST" && "$MODE" == resume_smoke ]]; then
   "$ENV_ROOT/bin/python" scripts/prepare_countervid_subsets.py \
-    --data-root "$DATA" --output "$MANIFEST" --seed 42 --sizes 1000 2000
+    --data-root "$DATA" --output "$MANIFEST" --seed 42 --sizes 1000 2000 \
+    --preference-signal "$PREFERENCE_SIGNAL"
 fi
 test -r "$MANIFEST"
 echo "Job=${PBS_JOBID:-unknown} MODE=$MODE METHOD=$METHOD"
@@ -42,7 +45,7 @@ nvidia-smi
 
 ARGS=(--data-root "$DATA" --model "$MODEL" --output "$OUT"
       --manifest "$MANIFEST" --subset-size "$SUBSET_SIZE"
-      --method "$METHOD" --seed 42)
+      --method "$METHOD" --seed 42 --preference-signal "$PREFERENCE_SIGNAL")
 SCRIPT=scripts/train_countervid_adaptive.py
 case "$MODE" in
   resume_smoke)

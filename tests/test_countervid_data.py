@@ -39,3 +39,18 @@ def test_rejects_duplicate_ids(tmp_path):
     video.touch()
     with pytest.raises(ValueError):
         select_freeform([example(), example()], tmp_path, "train")
+
+
+def test_visual_freeform_uses_chosen_video_and_shared_answer(tmp_path):
+    video = tmp_path / 'train' / 'videos' / 'chosen.mp4'
+    video.parent.mkdir(parents=True)
+    video.touch()
+    row = {**example(), 'preference_signal': 'visual', 'answer': 'Correct action.',
+           'chosen_answer': None, 'video_roles': ['chosen', 'rejected'],
+           'videos_file_names': ['videos/chosen.mp4', 'videos/rejected.mp4']}
+    assert select_freeform([row], tmp_path, 'train') == []
+    result = select_freeform([row], tmp_path, 'train', 'visual')
+    assert result[0]['answer'] == 'Correct action.'
+    assert result[0]['video_path'] == str(video)
+    with pytest.raises(ValueError, match='video roles'):
+        select_freeform([{**row, 'video_roles': ['rejected', 'chosen']}], tmp_path, 'train', 'visual')
