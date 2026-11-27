@@ -26,5 +26,8 @@ def test_pair_loading_and_metrics(tmp_path):
     assert result['base']['pair_accuracy'] == 1
     assert result['adaptive']['accuracy'] == 0.5
     assert result['adaptive']['pair_accuracy'] == 0
+    base_only = module.summarize(rows, ('base',))['TPH']
+    assert 'adaptive' not in base_only
+    assert base_only['base']['pair_accuracy'] == 1
     with pytest.raises(ValueError):
         module.summarize(rows[:1])

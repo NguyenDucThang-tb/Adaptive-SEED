@@ -43,7 +43,7 @@ def read_pairs(root, tasks):
     return result
 
 
-def summarize(rows):
+def summarize(rows, models=('base', 'adaptive')):
     summary = {}
     for task in sorted({row['task'] for row in rows}):
         selected = [row for row in rows if row['task'] == task]
@@ -53,7 +53,7 @@ def summarize(rows):
         if any(len(pair) != 2 or {row['role'] for row in pair} != {'basic', 'hallucination'} for pair in pairs.values()):
             raise ValueError(f'Incomplete or duplicate pair for {task}')
         summary[task] = {'questions': len(selected), 'pairs': len(pairs)}
-        for model in ('base', 'adaptive'):
+        for model in models:
             correct = sum(row[f'{model}_prediction'] == row['answer'] for row in selected)
             pair_correct = sum(all(row[f'{model}_prediction'] == row['answer'] for row in pair)
                                for pair in pairs.values())
@@ -66,7 +66,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--data-root', required=True)
     parser.add_argument('--model', required=True)
-    parser.add_argument('--adapter', required=True)
+    parser.add_argument('--adapter')
+    parser.add_argument('--frames', type=int, default=8)
     parser.add_argument('--output', required=True)
     parser.add_argument('--tasks', nargs='+', choices=sorted(VH_TASKS), default=['TPH', 'ORH'])
     parser.add_argument('--limit-pairs', type=int, help='Smoke only: first N pairs per task')
@@ -75,6 +76,8 @@ def main():
         parser.error('--limit-pairs must be positive')
     if len(set(args.tasks)) != len(args.tasks):
         parser.error('Duplicate tasks')
+    if args.frames < 2 or args.frames % 2:
+        parser.error('--frames must be a positive even number')
     import cv2
     import numpy as np
     import torch
@@ -90,7 +93,9 @@ def main():
     processor = AutoProcessor.from_pretrained(args.model, local_files_only=True)
     model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
         args.model, torch_dtype=torch.bfloat16, attn_implementation='sdpa', local_files_only=True).to('cuda')
-    model = PeftModel.from_pretrained(model, args.adapter, is_trainable=False).eval()
+    if args.adapter:
+        model = PeftModel.from_pretrained(model, args.adapter, is_trainable=False)
+    model.eval()
     yes = processor.tokenizer.encode('Yes', add_special_tokens=False)[0]
     no = processor.tokenizer.encode('No', add_special_tokens=False)[0]
     if yes == no:
@@ -104,7 +109,7 @@ def main():
             if not cap.isOpened() or n < 1:
                 raise RuntimeError(f'Cannot read {item["video"]}')
             frames = []
-            for i in np.rint(np.linspace(0, n - 1, 8)).astype(int):
+            for i in np.rint(np.linspace(0, n - 1, args.frames)).astype(int):
                 cap.set(cv2.CAP_PROP_POS_FRAMES, int(i))
                 ok, frame = cap.read()
                 if not ok:
@@ -116,13 +121,18 @@ def main():
             {'type': 'video'}, {'type': 'text', 'text': item['question'].strip() + '\nAnswer with yes or no.'}]}],
             tokenize=False, add_generation_prompt=True)
         video = torch.from_numpy(np.stack(frames)).permute(0, 3, 1, 2)
-        inp = processor(text=[prompt], videos=[video], fps=8 / max(n / fps, 0.001), return_tensors='pt').to('cuda')
+        inp = processor(text=[prompt], videos=[video], fps=args.frames / max(n / fps, 0.001), return_tensors='pt').to('cuda')
         with torch.no_grad():
-            with model.disable_adapter():
+            if args.adapter:
+                with model.disable_adapter():
+                    base = model(**inp).logits[0, -1].float()
+                adaptive = model(**inp).logits[0, -1].float()
+                predictions = (('base', base), ('adaptive', adaptive))
+            else:
                 base = model(**inp).logits[0, -1].float()
-            adaptive = model(**inp).logits[0, -1].float()
+                predictions = (('base', base),)
         row = dict(item)
-        for name, logits in (('base', base), ('adaptive', adaptive)):
+        for name, logits in predictions:
             margin = (logits[yes] - logits[no]).item()
             if not np.isfinite(margin):
                 raise ValueError(f'Nonfinite {name} margin: {item["pair_id"]}')
@@ -130,8 +140,8 @@ def main():
             row[f'{name}_prediction'] = 'yes' if margin > 0 else 'no'
         rows.append(row)
         print(json.dumps(row), flush=True)
-    summary = summarize(rows)
-    metadata = dict(model=args.model, adapter=args.adapter, tasks=args.tasks, frames=8, size=448,
+    summary = summarize(rows, ('base', 'adaptive') if args.adapter else ('base',))
+    metadata = dict(model=args.model, adapter=args.adapter, tasks=args.tasks, frames=args.frames, size=448,
                     yes_token=yes, no_token=no, limit_pairs=args.limit_pairs,
                     protocol='first-token Yes/No margin', results=summary)
     (out / 'predictions.jsonl').write_text(''.join(json.dumps(row) + '\n' for row in rows))

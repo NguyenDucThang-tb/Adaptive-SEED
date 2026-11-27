@@ -7,13 +7,15 @@
 set -euo pipefail
 : "${RUN:?RUN is required}"
 : "${VH_DATA:?VH_DATA is required}"
-: "${ADAPTER:?ADAPTER is required}"
 : "${OUT:?OUT is required}"
+FRAMES=${FRAMES:-8}
 ARCHIVE=${ARCHIVE:-/g/data/hn98/$USER/envs/adaptive_seed_qwen25_videomme_20261114_v2.tar.gz}
 MODEL=${MODEL:-/g/data/hn98/$USER/models/hf_cache_qwen25/models--Qwen--Qwen2.5-VL-7B-Instruct/snapshots/cc594898137f460bfe9f0759e9844b3ce807cfb5}
 test -r "$ARCHIVE"
 test -r "$MODEL/config.json"
-test -r "$ADAPTER/adapter_config.json"
+if [[ -n "${ADAPTER:-}" ]]; then
+  test -r "$ADAPTER/adapter_config.json"
+fi
 test -d "$VH_DATA"
 cd "$RUN"
 mkdir -p "$PBS_JOBFS/env"
@@ -23,7 +25,10 @@ export PYTHONNOUSERSITE=1
 "$PBS_JOBFS/env/bin/python" "$PBS_JOBFS/env/bin/conda-unpack"
 echo "PBS_JOBID=$PBS_JOBID"
 git rev-parse HEAD
-ARGS=(--data-root "$VH_DATA" --model "$MODEL" --adapter "$ADAPTER" --output "$OUT" --tasks TPH ORH)
+ARGS=(--data-root "$VH_DATA" --model "$MODEL" --output "$OUT" --tasks TPH ORH --frames "$FRAMES")
+if [[ -n "${ADAPTER:-}" ]]; then
+  ARGS+=(--adapter "$ADAPTER")
+fi
 if [[ -n "${LIMIT_PAIRS:-}" ]]; then
   ARGS+=(--limit-pairs "$LIMIT_PAIRS")
 fi
